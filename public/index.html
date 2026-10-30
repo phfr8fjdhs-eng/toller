@@ -6,12 +6,16 @@
 <title>Baustellen-Dashboard</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
 <style>
   :root{
     --bg:#0f1419; --panel:#1a222c; --line:#2a3542; --text:#e6edf3; --muted:#8b98a5;
     --ok:#2ea043; --wait:#d4a72c; --bad:#f85149; --off:#6e7681; --sel:#58a6ff;
+    color-scheme:dark;
   }
   *{box-sizing:border-box}
+  [hidden]{display:none!important}
   body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
   header{display:flex;flex-wrap:wrap;gap:12px 18px;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
   h1{font-size:18px;margin:0}
@@ -22,16 +26,23 @@
   .dot.waiting{background:var(--wait)}
   .dot.broken{background:var(--bad)}
   .dot.off{background:var(--off)}
-  button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer}
+  button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit}
   button:hover{border-color:var(--muted)}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
   button.active{border-color:var(--sel);color:#fff}
+  button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  button.danger{border-color:var(--bad);color:#ffb3ae}
+  button.linkbtn{background:none;border:0;color:var(--sel);padding:6px 0}
+  button:disabled{opacity:.5;cursor:default}
   .hud{display:flex;align-items:center;gap:10px;font-size:13px}
   .hudbar{width:160px;height:14px;background:#0b0f14;border:1px solid var(--line);border-radius:7px;overflow:hidden}
   .hudbar i{display:block;height:100%;width:100%;background:var(--ok);transition:width .4s,background .4s}
   .muted{color:var(--muted)}
+  #demoNote{background:#2a2410;color:#e8d28a;padding:8px 16px;font-size:13px;border-bottom:1px solid #4a3f17}
   #banner{display:none;background:var(--bad);color:#fff;padding:10px 16px;font-weight:600}
   #banner.show{display:block;animation:pulse 1s infinite}
-  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px}
+  main{display:grid;grid-template-columns:1fr 360px;gap:16px;padding:16px}
+  main>*{min-width:0}
   @media(max-width:900px){main{grid-template-columns:1fr}}
 
   #map{position:relative;aspect-ratio:16/10;min-height:460px;border:2px solid var(--line);border-radius:12px;background:#121a22;overflow:hidden}
@@ -56,30 +67,65 @@
 
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:16px}
   .panel h2{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
-  .dhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-  .mrow{display:flex;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13px}
-  .mtxt{flex:1;min-width:0}
+  .dhead{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+  .mrow{display:flex;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13px;flex-wrap:wrap}
+  .mtxt{flex:1;min-width:140px}
   .mname{font-weight:600}
-  .mrow button{padding:4px 8px;font-size:12px}
+  .mrow button,.avail button{padding:4px 8px;font-size:12px}
   .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
   .sub{margin:12px 0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
   .avail{display:flex;gap:6px;flex-wrap:wrap}
   .item{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line);font-size:13px;cursor:pointer}
   .item:first-of-type{border-top:0}
   .item .dot{margin-top:4px}
+  .item.sel{color:#fff}
   .empty{color:var(--muted);font-size:13px}
   .log{font-size:12px;color:var(--muted);padding:3px 0}
   .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .levelrow{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px;flex-wrap:wrap}
+  .levelrow input{width:72px}
+  #siteList{max-height:300px;overflow:auto;margin-top:8px}
+  input,select{background:#0f1419;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;width:100%}
+  input[type=number]{width:auto}
+
   #lmap{position:absolute;inset:0;display:none;background:#121a22}
   #map.real{aspect-ratio:auto;height:560px;min-height:0}
   #map.real #lmap{display:block}
   #map.real svg,#map.real #sites{display:none}
+  #map.picking #lmap{cursor:crosshair}
   .lm{background:none;border:0}
   .lm .site{position:static;transform:none;width:150px;left:auto!important;top:auto!important}
+  #lmap.compact .site{width:auto;max-width:130px;padding:5px 7px}
+  #lmap.compact .site .mat,#lmap.compact .site .bar{display:none}
+  #lmap.compact .site .dots{margin:4px 0 0}
   #lmap .maplibregl-canvas{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.95) saturate(.7)}
   .maplibregl-ctrl-attrib{font-size:10px}
   .mapbtns{position:absolute;left:10px;top:10px;z-index:5;display:none;gap:6px}
   #map.real .mapbtns{display:flex}
+
+  .overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto}
+  .overlay.solid{background:var(--bg)}
+  .overlay.modalov{background:rgba(5,8,12,.72);align-items:flex-start}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:100%;max-width:440px;margin:auto}
+  .card.wide{max-width:640px}
+  .cardhead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+  .cardhead h2{margin:0;font-size:17px}
+  .form{display:flex;flex-direction:column;gap:12px}
+  .form label{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .row2>*{min-width:0}
+  .msg{min-height:18px;font-size:13px}
+  .msg.err{color:#ffb3ae}
+  .msg.ok{color:#9be3a8}
+  .results{display:flex;flex-direction:column;gap:4px}
+  .results button{text-align:left;width:100%}
+  .urow{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:9px 0;border-top:1px solid var(--line);font-size:13px;flex-wrap:wrap}
+  .urow:first-child{border-top:0}
+  .urow .acts{justify-content:flex-start}
+  #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#243140;border:1px solid var(--line);color:var(--text);padding:10px 14px;border-radius:10px;font-size:13px;z-index:80;max-width:min(92vw,460px)}
+  #toast.err{border-color:var(--bad);color:#ffd0cc}
+  #pickBar{position:fixed;left:0;right:0;top:0;z-index:70;background:#1f6feb;color:#fff;padding:12px 16px;display:flex;gap:12px;align-items:center;justify-content:space-between}
+
   @media(max-width:600px){
     header{gap:10px}
     .hudbar{width:110px}
@@ -88,7 +134,9 @@
     #sites{position:static;display:grid;grid-template-columns:1fr 1fr;gap:10px}
     .site{position:static;transform:none;width:auto}
     .mrow button,.avail button{padding:9px 12px}
+    .row2{grid-template-columns:1fr}
   }
+  @media(prefers-reduced-motion:reduce){.site.broken,#banner.show{animation:none}}
   @keyframes blink{50%{background:#3a1a1c}}
   @keyframes pulse{50%{opacity:.75}}
 </style>
@@ -101,6 +149,7 @@
     <span id="hudText">Einsatzbereitschaft</span>
     <div class="hudbar"><i id="hudFill"></i></div>
     <span id="incidents" class="muted">Störungen: 0</span>
+    <span id="conn" class="muted" hidden></span>
   </div>
   <div class="filters" id="filters">
     <button data-f="all" class="active">Alle</button>
@@ -109,10 +158,16 @@
     <button data-f="tief">Tiefbau</button>
   </div>
   <div class="btns">
+    <button id="addSiteBtn" class="primary">+ Baustelle</button>
+    <button id="addMachineBtn">+ Maschine</button>
+    <button id="usersBtn" hidden>Benutzer</button>
     <button id="soundBtn">Ton aus</button>
-    <button id="failBtn">Störung simulieren</button>
+    <button id="failBtn" hidden>Störung simulieren</button>
+    <span id="userChip" class="muted" hidden></span>
+    <button id="logoutBtn" hidden>Abmelden</button>
   </div>
 </header>
+<div id="demoNote" hidden>Demo-Modus: erfundene Daten, nichts wird gespeichert und nichts wird mit anderen Handys geteilt.</div>
 <div id="banner" role="alert"></div>
 <main>
   <section>
@@ -138,65 +193,115 @@
     </div>
   </section>
   <aside>
+    <div class="panel">
+      <h2>Baustellen</h2>
+      <input id="siteSearch" type="search" placeholder="Baustelle suchen" autocomplete="off" aria-label="Baustelle suchen">
+      <div id="siteList"></div>
+    </div>
     <div class="panel"><h2>Baustelle</h2><div id="detail"></div></div>
     <div class="panel"><h2>Probleme</h2><div id="problems"></div></div>
     <div class="panel"><h2>Protokoll</h2><div id="log"></div></div>
   </aside>
 </main>
 
+<div id="auth" class="overlay solid" hidden>
+  <div class="card">
+    <div class="cardhead"><h2 id="authTitle">Anmelden</h2></div>
+    <form id="authForm" class="form" novalidate>
+      <label id="nameRow" hidden>Name<input id="aName" type="text" autocomplete="name" maxlength="60"></label>
+      <label>E-Mail<input id="aMail" type="email" autocomplete="email" inputmode="email"></label>
+      <label>Passwort (mindestens 8 Zeichen)<input id="aPass" type="password" autocomplete="current-password"></label>
+      <div id="authMsg" class="msg" role="status"></div>
+      <button type="submit" id="authGo" class="primary">Anmelden</button>
+    </form>
+    <button id="authToggle" type="button" class="linkbtn">Neu hier? Konto anlegen</button>
+  </div>
+</div>
+
+<div id="pending" class="overlay solid" hidden>
+  <div class="card">
+    <div class="cardhead"><h2>Warten auf Freigabe</h2></div>
+    <p id="pendingText" class="muted">Dein Konto ist angelegt. Eine Person mit Admin-Rechten muss dich freigeben, bevor du Daten siehst.</p>
+    <div class="acts" style="justify-content:flex-start">
+      <button id="pendingCheck" class="primary">Neu prüfen</button>
+      <button id="pendingOut">Abmelden</button>
+    </div>
+  </div>
+</div>
+
+<div id="pickBar" hidden><span>Tippe auf die Karte, um den Ort der Baustelle zu wählen.</span><button id="pickCancel">Abbrechen</button></div>
+<div id="toast" hidden></div>
+
 <script>
+/* =============================================================== Einstellungen */
+const CFG = Object.assign({ supabaseUrl:"", supabaseKey:"", depot:{ lat:47.2340, lng:8.8600 } }, window.APP_CONFIG || {});
+const LIVE = !!(CFG.supabaseUrl && CFG.supabaseKey);
+
 const SPARTEN = { garten:"Gartenbau", strasse:"Strassenbau", tief:"Tiefbau" };
 const TAG = { garten:"G", strasse:"S", tief:"T" };
 const LABEL = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Im Werkhof" };
 const SHORT = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Werkhof" };
+const MATERIALS = ["Humus","Asphalt","Kies","Beton","Pflanzen","Sand","Schotter","Rasen"];
+const TYPEN = ["Bagger","Minibagger","Dumper","Walze","Fertiger","LKW","Radlader","Teleskoplader","Rüttelplatte","Mäher"];
 
-// x, y = Position auf der Skizze (Prozent). lat, lng = echte Position auf der Karte (Beispielwerte).
-const DEPOT = { id:"depot", name:"Werkhof", sparte:null, x:62, y:84, lat:47.2340, lng:8.8600 };
+const DEPOT = { id:"depot", name:"Werkhof", sparte:null, lat:CFG.depot.lat, lng:CFG.depot.lng };
 
-const sites = [
-  { id:"s1", name:"Birkenweg",         sparte:"garten",  material:{ name:"Humus",   level:80 }, x:16, y:24, lat:47.2300, lng:8.8420 },
-  { id:"s2", name:"Umfahrung Nord",    sparte:"strasse", material:{ name:"Asphalt", level:70 }, x:55, y:18, lat:47.2560, lng:8.8480 },
-  { id:"s3", name:"Kanal Bahnhofstr.", sparte:"tief",    material:{ name:"Kies",    level:60 }, x:38, y:52, lat:47.2258, lng:8.8212 },
-  { id:"s4", name:"Park Seeblick",     sparte:"garten",  material:{ name:"Pflanzen",level:45 }, x:82, y:46, lat:47.2335, lng:8.8185 },
-  { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse", material:{ name:"Beton",   level:90 }, x:18, y:76, lat:47.2406, lng:8.9221 }
-];
-
-const machines = [
-  { id:1,  name:"Bagger 1",     typ:"Bagger",       sparte:"tief",    site:"s3", status:"running", tank:80,  reason:"" },
-  { id:2,  name:"Minibagger 1", typ:"Minibagger",   sparte:"tief",    site:"s3", status:"running", tank:60,  reason:"" },
-  { id:3,  name:"Dumper 1",     typ:"Dumper",       sparte:"tief",    site:"s3", status:"running", tank:90,  reason:"" },
-  { id:4,  name:"Walze 1",      typ:"Walze",        sparte:"strasse", site:"s2", status:"running", tank:70,  reason:"" },
-  { id:5,  name:"Fertiger 1",   typ:"Fertiger",     sparte:"strasse", site:"s2", status:"running", tank:85,  reason:"" },
-  { id:6,  name:"LKW 1",        typ:"LKW",          sparte:"strasse", site:"s2", status:"running", tank:50,  reason:"" },
-  { id:7,  name:"Radlader 1",   typ:"Radlader",     sparte:"strasse", site:"s5", status:"running", tank:75,  reason:"" },
-  { id:8,  name:"Rüttelplatte", typ:"Rüttelplatte", sparte:"strasse", site:"s5", status:"running", tank:65,  reason:"" },
-  { id:9,  name:"Minibagger 2", typ:"Minibagger",   sparte:"garten",  site:"s1", status:"running", tank:80,  reason:"" },
-  { id:10, name:"Dumper 2",     typ:"Dumper",       sparte:"garten",  site:"s1", status:"running", tank:55,  reason:"" },
-  { id:11, name:"Radlader 2",   typ:"Radlader",     sparte:"garten",  site:"s4", status:"running", tank:90,  reason:"" },
-  { id:12, name:"Aufsitzmäher", typ:"Mäher",        sparte:"garten",  site:"s4", status:"running", tank:70,  reason:"" },
-  { id:13, name:"Bagger 2",     typ:"Bagger",       sparte:"tief",    site:null, status:"off",     tank:100, reason:"" },
-  { id:14, name:"LKW 2",        typ:"LKW",          sparte:"strasse", site:null, status:"off",     tank:100, reason:"" },
-  { id:15, name:"Teleskoplader",typ:"Teleskoplader",sparte:"garten",  site:null, status:"off",     tank:100, reason:"" }
-];
-
-let soundOn = true;
-let audioCtx = null;
-let selected = "s3";
+/* =============================================================== Zustand */
+let sites = [];        // { id, name, sparte, material:{name,level}, lat, lng, x?, y? }
+let machines = [];     // { id, name, typ, sparte, site (Baustellen-Id oder null), status, tank, reason }
+let selected = null;
 let filter = "all";
 let incidents = 0;
+let soundOn = true;
+let audioCtx = null;
 let pressing = false, pressStart = 0;
+let localId = 0;
 const logs = [];
+const seenLog = new Set();
 
-/* ---------- Hilfen ---------- */
+let sb = null, me = null, channel = null, subscribedOnce = false;
+let pickCb = null, pickDraft = null;
+let didOverview = false;
+
+/* =============================================================== Demo-Daten */
+function loadDemo(){
+  sites = [
+    { id:"s1", name:"Birkenweg",         sparte:"garten",  material:{ name:"Humus",    level:80 }, x:16, y:24, lat:47.2300, lng:8.8420 },
+    { id:"s2", name:"Umfahrung Nord",    sparte:"strasse", material:{ name:"Asphalt",  level:70 }, x:55, y:18, lat:47.2560, lng:8.8480 },
+    { id:"s3", name:"Kanal Bahnhofstr.", sparte:"tief",    material:{ name:"Kies",     level:60 }, x:38, y:52, lat:47.2258, lng:8.8212 },
+    { id:"s4", name:"Park Seeblick",     sparte:"garten",  material:{ name:"Pflanzen", level:45 }, x:82, y:46, lat:47.2335, lng:8.8185 },
+    { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse", material:{ name:"Beton",    level:90 }, x:18, y:76, lat:47.2406, lng:8.9221 }
+  ];
+  const M = (id,name,typ,sparte,site,status,tank) => ({ id, name, typ, sparte, site, status, tank, reason:"" });
+  machines = [
+    M(1,"Bagger 1","Bagger","tief","s3","running",80), M(2,"Minibagger 1","Minibagger","tief","s3","running",60),
+    M(3,"Dumper 1","Dumper","tief","s3","running",90), M(4,"Walze 1","Walze","strasse","s2","running",70),
+    M(5,"Fertiger 1","Fertiger","strasse","s2","running",85), M(6,"LKW 1","LKW","strasse","s2","running",50),
+    M(7,"Radlader 1","Radlader","strasse","s5","running",75), M(8,"Rüttelplatte","Rüttelplatte","strasse","s5","running",65),
+    M(9,"Minibagger 2","Minibagger","garten","s1","running",80), M(10,"Dumper 2","Dumper","garten","s1","running",55),
+    M(11,"Radlader 2","Radlader","garten","s4","running",90), M(12,"Aufsitzmäher","Mäher","garten","s4","running",70),
+    M(13,"Bagger 2","Bagger","tief",null,"off",100), M(14,"LKW 2","LKW","strasse",null,"off",100),
+    M(15,"Teleskoplader","Teleskoplader","garten",null,"off",100)
+  ];
+  selected = "s3";
+  DEPOT.x = 62; DEPOT.y = 84;   // feste Position des Werkhofs auf der Skizze
+}
+
+/* =============================================================== Hilfen */
 function el(tag, cls, text){
   const e = document.createElement(tag);
   if(cls) e.className = cls;
   if(text !== undefined) e.textContent = text;
   return e;
 }
+const $ = id => document.getElementById(id);
 const loc = m => m.site || "depot";
 const siteOf = m => sites.find(s => s.id === m.site) || null;
+const findSite = id => id === "depot" ? DEPOT : sites.find(s => s.id === id) || null;
 const showSparte = sp => filter === "all" || sp === filter;
+const isAdmin = () => !LIVE || (me && me.role === "admin");
+const where = m => { const s = siteOf(m); return s ? " (" + s.name + ")" : ""; };
+const timeStr = d => new Date(d).toLocaleTimeString("de-CH", { hour:"2-digit", minute:"2-digit", second:"2-digit" });
 
 function siteStatus(s){
   const ms = machines.filter(m => m.site === s.id);
@@ -205,11 +310,36 @@ function siteStatus(s){
   if(ms.some(m => m.status === "running")) return "running";
   return "off";
 }
+const RANK = { broken:0, waiting:1, running:2, off:3 };
+
+// Position auf der Skizze (Prozent). Eigene Werte nutzen, sonst aus lat/lng berechnen.
+function pos(s){
+  if(typeof s.x === "number" && typeof s.y === "number") return { x:s.x, y:s.y };
+  const pts = sites.concat([DEPOT]);
+  const lats = pts.map(p => p.lat), lngs = pts.map(p => p.lng);
+  const minLat = Math.min.apply(null, lats), maxLat = Math.max.apply(null, lats);
+  const minLng = Math.min.apply(null, lngs), maxLng = Math.max.apply(null, lngs);
+  return {
+    x: 12 + 76 * (s.lng - minLng) / ((maxLng - minLng) || 1),
+    y: 12 + 76 * (maxLat - s.lat) / ((maxLat - minLat) || 1)
+  };
+}
+
+let toastTimer = null;
+function toast(msg, isErr){
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = isErr ? "err" : "";
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ t.hidden = true; }, isErr ? 6000 : 3000);
+}
 
 function beep(){
   if(!soundOn) return;
   try{
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === "suspended") audioCtx.resume();
     [0, 0.3].forEach(t=>{
       const o = audioCtx.createOscillator(), g = audioCtx.createGain();
       o.type = "square"; o.frequency.value = 880;
@@ -221,91 +351,187 @@ function beep(){
     });
   }catch(e){}
 }
+// Handys erlauben Ton erst nach der ersten Berührung
+document.addEventListener("pointerdown", ()=>{
+  try{ if(audioCtx && audioCtx.state === "suspended") audioCtx.resume(); }catch(e){}
+}, true);
 
-function addLog(text){
-  const t = new Date().toLocaleTimeString("de-CH",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-  logs.unshift(t + "  " + text);
-  if(logs.length > 8) logs.pop();
+function pushLog(text, ts, id){
+  if(id !== undefined && id !== null){
+    if(seenLog.has(id)) return;
+    seenLog.add(id);
+  }
+  logs.unshift(timeStr(ts || Date.now()) + "  " + text);
+  if(logs.length > 8) logs.length = 8;
+}
+async function addLog(text){
+  if(!LIVE){ pushLog(text); return; }
+  const full = (me ? text + " (" + me.name + ")" : text).slice(0, 300);
+  const r = await sb.from("activity").insert({ text: full }).select().single();
+  if(!r.error && r.data) pushLog(r.data.text, r.data.created_at, r.data.id);
 }
 
-function setStatus(m, status, reason){
-  if(m.status === status) return;
-  m.status = status;
-  m.reason = status === "waiting" ? (reason || "") : "";
-  const s = siteOf(m);
-  const where = s ? " (" + s.name + ")" : "";
-  if(status === "broken"){
-    incidents++;
-    addLog(m.name + " ausgefallen" + where);
-    beep();                       // nur einmal pro neuer Störung
-  } else if(status === "waiting"){
-    addLog(m.name + ": " + m.reason + where);
+/* =============================================================== Daten: Änderungen */
+function onBreak(){ incidents++; beep(); }   // nur einmal pro neuer Störung
+
+async function dbMachine(m, patch){
+  const row = {};
+  if("status" in patch) row.status = patch.status;
+  if("reason" in patch) row.reason = patch.reason;
+  if("tank" in patch) row.tank = patch.tank;
+  if("site" in patch) row.site_id = patch.site;
+  const r = await sb.from("machines").update(row).eq("id", m.id);
+  if(r.error){ toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll(); }
+}
+
+function setMachine(m, patch, logText){
+  const old = m.status;
+  Object.assign(m, patch);
+  if(old !== "broken" && m.status === "broken") onBreak();
+  if(logText) addLog(logText);
+  render();
+  if(LIVE) dbMachine(m, patch);
+}
+
+// Setzt den Füllstand. Reicht das Material wieder, laufen die wartenden Maschinen der Baustelle weiter.
+async function setSiteLevel(s, level, logText){
+  s.material.level = level;
+  let released = false;
+  if(level > 15){
+    machines.forEach(x=>{
+      if(x.site === s.id && x.status === "waiting" && x.reason.indexOf("Material") === 0){ x.status = "running"; x.reason = ""; released = true; }
+    });
+  }
+  if(logText) addLog(logText);
+  render();
+  if(LIVE){
+    const r = await sb.from("sites").update({ material_level: level }).eq("id", s.id);
+    if(r.error){ toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll(); return; }
+    if(released){
+      const u = await sb.from("machines").update({ status:"running", reason:"" })
+        .eq("site_id", s.id).eq("status", "waiting").like("reason", "Material%");
+      if(u.error){ toast("Speichern fehlgeschlagen: " + u.error.message, true); loadAll(); }
+    }
   }
 }
 
-/* ---------- Simulation ---------- */
-function tick(){
-  sites.forEach(s=>{
-    const r = machines.filter(m => m.site === s.id && m.status === "running").length;
-    s.material.level = Math.max(0, s.material.level - r * (0.5 + Math.random() * 0.8));
-  });
-  machines.forEach(m=>{
-    if(m.status !== "running") return;
-    const s = siteOf(m);
-    m.tank = Math.max(0, m.tank - (1 + Math.random() * 2));
-    if(s && s.material.level <= 15) setStatus(m, "waiting", "Material fehlt: " + s.material.name);
-    else if(m.tank <= 15) setStatus(m, "waiting", "Diesel leer");
-    else if(Math.random() < 0.004) setStatus(m, "broken");
-  });
-  softRender();
+function report(m, kind){
+  const s = siteOf(m);
+  if(kind === "broken") setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m));
+  if(kind === "material") setMachine(m, { status:"waiting", reason:"Material fehlt: " + ((s && s.material.name) || "Material") }, m.name + ": Material fehlt" + where(m));
+  if(kind === "diesel") setMachine(m, { status:"waiting", reason:"Diesel leer", tank:Math.min(m.tank, 10) }, m.name + ": Diesel leer" + where(m));
 }
 
-/* ---------- Aktionen ---------- */
 function resolve(m){
   if(m.status === "broken"){
-    m.status = "running"; m.reason = "";
-    addLog(m.name + " repariert");
+    setMachine(m, { status:"running", reason:"" }, m.name + " repariert" + where(m));
   } else if(m.status === "waiting"){
     if(m.reason.indexOf("Material") === 0){
       const s = siteOf(m);
-      if(s){
-        s.material.level = 100;
-        machines.forEach(x=>{
-          if(x.site === s.id && x.status === "waiting" && x.reason.indexOf("Material") === 0){
-            x.status = "running"; x.reason = "";
-          }
-        });
-        addLog(s.material.name + " nachgeliefert (" + s.name + ")");
-      }
+      if(!s) return;
+      setSiteLevel(s, 100, (s.material.name || "Material") + " nachgeliefert (" + s.name + ")");
     } else {
-      m.tank = 100; m.status = "running"; m.reason = "";
-      addLog(m.name + " getankt");
+      setMachine(m, { tank:100, status:"running", reason:"" }, m.name + " getankt" + where(m));
     }
   }
-  render();
 }
 
-function moveTo(m, siteId){
-  if(siteId === "depot"){
-    m.site = null; m.status = "off"; m.reason = "";
-    addLog(m.name + " zurück im Werkhof");
-  } else {
-    const s = sites.find(x => x.id === siteId);
-    m.site = siteId; m.status = "running"; m.reason = "";
-    addLog(m.name + " im Einsatz: " + (s ? s.name : siteId));
+function toDepot(m){ setMachine(m, { site:null, status:"off", reason:"" }, m.name + " zurück im Werkhof"); }
+function deploy(m, siteId){
+  const s = findSite(siteId);
+  setMachine(m, { site:siteId, status:"running", reason:"" }, m.name + " im Einsatz: " + (s ? s.name : ""));
+}
+
+/* =============================================================== Daten: Anlegen und Löschen */
+const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, material:{ name:r.material_name || "", level:Number(r.material_level) }, lat:r.lat, lng:r.lng });
+const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, tank:Number(r.tank), reason:r.reason || "" });
+
+function upsertSite(s){
+  const i = sites.findIndex(x => x.id === s.id);
+  if(i >= 0) Object.assign(sites[i], s); else sites.push(s);
+}
+function upsertMachine(m){
+  const i = machines.findIndex(x => x.id === m.id);
+  if(i >= 0) Object.assign(machines[i], m); else machines.push(m);
+}
+
+async function createSite(v){
+  if(!LIVE){
+    const s = { id:"n" + (++localId), name:v.name, sparte:v.sparte, material:{ name:v.mat, level:v.level }, lat:v.lat, lng:v.lng };
+    sites.push(s); selectSite(s.id); addLog("Neue Baustelle: " + s.name);
+    return true;
   }
-  render();
+  const r = await sb.from("sites").insert({ name:v.name, sparte:v.sparte, material_name:v.mat, material_level:v.level, lat:v.lat, lng:v.lng }).select().single();
+  if(r.error){ toast("Baustelle konnte nicht gespeichert werden: " + r.error.message, true); return false; }
+  upsertSite(mapSite(r.data)); selectSite(r.data.id); addLog("Neue Baustelle: " + r.data.name);
+  return true;
 }
 
-/* ---------- Anzeige ---------- */
+async function createMachine(v){
+  const status = v.site ? "running" : "off";
+  if(!LIVE){
+    machines.push({ id:"n" + (++localId), name:v.name, typ:v.typ, sparte:v.sparte, site:v.site, status, tank:100, reason:"" });
+    addLog("Neue Maschine: " + v.name); render();
+    return true;
+  }
+  const r = await sb.from("machines").insert({ name:v.name, typ:v.typ, sparte:v.sparte, site_id:v.site, status, tank:100 }).select().single();
+  if(r.error){ toast("Maschine konnte nicht gespeichert werden: " + r.error.message, true); return false; }
+  upsertMachine(mapMachine(r.data)); addLog("Neue Maschine: " + r.data.name); render();
+  return true;
+}
+
+async function deleteMachine(m){
+  machines = machines.filter(x => x.id !== m.id);
+  addLog(m.name + " gelöscht"); render();
+  if(LIVE){
+    const r = await sb.from("machines").delete().eq("id", m.id);
+    if(r.error){ toast("Löschen fehlgeschlagen: " + r.error.message, true); loadAll(); }
+  }
+}
+
+async function deleteSite(s){
+  // Maschinen der Baustelle zuerst in den Werkhof, damit keine Maschine ohne Ort "läuft"
+  machines.filter(m => m.site === s.id).forEach(m => { m.site = null; m.status = "off"; m.reason = ""; });
+  sites = sites.filter(x => x.id !== s.id);
+  if(selected === s.id) selected = null;
+  addLog("Baustelle gelöscht: " + s.name); render();
+  if(LIVE){
+    const a = await sb.from("machines").update({ site_id:null, status:"off", reason:"" }).eq("site_id", s.id);
+    const b = a.error ? a : await sb.from("sites").delete().eq("id", s.id);
+    if(b.error){ toast("Löschen fehlgeschlagen: " + b.error.message, true); loadAll(); }
+  }
+}
+
+// Zwei-Schritt-Knopf statt confirm(): erster Tipp fragt nach, zweiter führt aus
+// Der Zustand liegt ausserhalb der Anzeige, damit ein Neuzeichnen (z. B. durch eine Änderung
+// von einem anderen Handy) die Rückfrage nicht zurücksetzt.
+const armedUntil = {};
+function confirmBtn(label, key, onConfirm){
+  const isArmed = ()=> (armedUntil[key] || 0) > Date.now();
+  const b = el("button", "danger", isArmed() ? "Sicher? Nochmal tippen" : label);
+  b.onclick = ()=>{
+    if(!isArmed()){
+      armedUntil[key] = Date.now() + 4000;
+      b.textContent = "Sicher? Nochmal tippen";
+      setTimeout(()=>{ if(!isArmed() && b.isConnected) b.textContent = label; }, 4100);
+    } else {
+      delete armedUntil[key];
+      onConfirm();
+    }
+  };
+  return b;
+}
+
+/* =============================================================== Anzeige */
 function marker(s, isDepot){
   const ms = machines.filter(m => loc(m) === s.id);
   const st = isDepot ? "off" : siteStatus(s);
+  const p = pos(s);
   const d = el("div", "site " + st + (isDepot ? " depot" : "") +
     (selected === s.id ? " sel" : "") +
     (!isDepot && !showSparte(s.sparte) ? " dim" : ""));
-  d.style.left = s.x + "%";
-  d.style.top = s.y + "%";
+  d.style.left = p.x + "%";
+  d.style.top = p.y + "%";
 
   const top = el("div", "top");
   if(s.sparte) top.appendChild(el("span", "tag", TAG[s.sparte]));
@@ -313,12 +539,12 @@ function marker(s, isDepot){
   d.appendChild(top);
 
   const dots = el("div", "dots");
-  ms.forEach(m => dots.appendChild(el("span", "dot " + m.status)));
+  ms.slice(0, 24).forEach(m => dots.appendChild(el("span", "dot " + m.status)));
   d.appendChild(dots);
 
   if(s.material){
     const low = s.material.level <= 15;
-    d.appendChild(el("div", "mat", s.material.name + " " + Math.round(s.material.level) + "%" + (low ? " – fehlt!" : "")));
+    d.appendChild(el("div", "mat", (s.material.name || "Material") + " " + Math.round(s.material.level) + "%" + (low ? " – fehlt!" : "")));
     const bar = el("div", "bar" + (low ? " low" : ""));
     const i = el("i");
     i.style.width = Math.round(s.material.level) + "%";
@@ -332,10 +558,17 @@ function marker(s, isDepot){
 }
 
 function renderDetail(){
-  const box = document.getElementById("detail");
+  const box = $("detail");
+  const ae = document.activeElement;
+  if(ae && box.contains(ae) && ae.tagName === "INPUT") return;   // nicht stören, solange jemand tippt
   box.innerHTML = "";
-  const s = selected === "depot" ? DEPOT : sites.find(x => x.id === selected);
-  if(!s){ box.appendChild(el("div", "empty", "Klicke auf eine Baustelle auf der Karte.")); return; }
+
+  if(LIVE && !sites.length && selected === null){
+    box.appendChild(el("div", "empty", "Noch keine Baustellen. Lege die erste mit „+ Baustelle“ an."));
+    return;
+  }
+  const s = findSite(selected);
+  if(!s){ box.appendChild(el("div", "empty", "Wähle eine Baustelle in der Liste oder auf der Karte.")); return; }
 
   const head = el("div", "dhead");
   if(s.sparte) head.appendChild(el("span", "tag", TAG[s.sparte]));
@@ -345,12 +578,29 @@ function renderDetail(){
 
   if(s.material){
     const low = s.material.level <= 15;
-    box.appendChild(el("div", "muted", "Material: " + s.material.name + " " + Math.round(s.material.level) + "%"));
+    box.appendChild(el("div", "muted", "Material: " + (s.material.name || "–") + " " + Math.round(s.material.level) + "%"));
     const bar = el("div", "bar" + (low ? " low" : ""));
     const i = el("i");
     i.style.width = Math.round(s.material.level) + "%";
     bar.appendChild(i);
     box.appendChild(bar);
+
+    const lr = el("div", "levelrow");
+    lr.appendChild(el("span", "muted", "Füllstand setzen:"));
+    const inp = el("input"); inp.type = "number"; inp.min = "0"; inp.max = "100"; inp.step = "5";
+    inp.value = String(Math.round(s.material.level)); inp.id = "levelInput";
+    inp.setAttribute("aria-label", "Material-Füllstand in Prozent");
+    inp.onchange = ()=>{
+      const v = Math.max(0, Math.min(100, Number(inp.value)));
+      inp.blur();
+      if(!isFinite(v)) return;
+      setSiteLevel(s, v, "Füllstand " + (s.material.name || "Material") + " " + v + "% (" + s.name + ")");
+    };
+    lr.appendChild(inp);
+    const full = el("button", "", "Nachgeliefert (100%)");
+    full.onclick = ()=>setSiteLevel(s, 100, (s.material.name || "Material") + " nachgeliefert (" + s.name + ")");
+    lr.appendChild(full);
+    box.appendChild(lr);
   }
 
   const list = machines.filter(m => loc(m) === s.id);
@@ -361,18 +611,21 @@ function renderDetail(){
     const t = el("div", "mtxt");
     t.appendChild(el("div", "mname", m.name));
     const state = m.status === "waiting" ? m.reason : LABEL[m.status];
-    t.appendChild(el("div", "muted", m.typ + " · " + state + " · Diesel " + Math.round(m.tank) + "%"));
+    t.appendChild(el("div", "muted", (m.typ ? m.typ + " · " : "") + state + " · Diesel " + Math.round(m.tank) + "%"));
     r.appendChild(t);
     const acts = el("div", "acts");
-    if(m.status === "broken"){
-      const b = el("button", "", "Reparieren"); b.onclick = ()=>resolve(m); acts.appendChild(b);
+    const add = (label, fn, cls)=>{ const b = el("button", cls || "", label); b.onclick = fn; acts.appendChild(b); };
+    if(m.status === "running"){
+      add("Defekt", ()=>report(m, "broken"));
+      add("Material fehlt", ()=>report(m, "material"));
+      add("Diesel leer", ()=>report(m, "diesel"));
+    } else if(m.status === "broken"){
+      add("Repariert", ()=>resolve(m));
     } else if(m.status === "waiting"){
-      const label = m.reason.indexOf("Material") === 0 ? "Nachliefern" : "Tanken";
-      const b = el("button", "", label); b.onclick = ()=>resolve(m); acts.appendChild(b);
+      add(m.reason.indexOf("Material") === 0 ? "Nachgeliefert" : "Getankt", ()=>resolve(m));
     }
-    if(m.site){
-      const b = el("button", "", "Zurück"); b.onclick = ()=>moveTo(m, "depot"); acts.appendChild(b);
-    }
+    if(m.site) add("Werkhof", ()=>toDepot(m));
+    if(isAdmin()) acts.appendChild(confirmBtn("Löschen", "m:" + m.id, ()=>deleteMachine(m)));
     r.appendChild(acts);
     box.appendChild(r);
   });
@@ -384,21 +637,40 @@ function renderDetail(){
     const wrap = el("div", "avail");
     avail.forEach(m=>{
       const b = el("button", "", "+ " + m.name);
-      b.onclick = ()=>moveTo(m, s.id);
+      b.onclick = ()=>deploy(m, s.id);
       wrap.appendChild(b);
     });
     box.appendChild(wrap);
+    if(isAdmin()){
+      const d = el("div", "sub", "Verwaltung");
+      box.appendChild(d);
+      box.appendChild(confirmBtn("Baustelle löschen", "s:" + s.id, ()=>deleteSite(s)));
+    }
   } else {
     box.appendChild(el("div", "sub", "Hinweis"));
     box.appendChild(el("div", "empty", "Wähle eine Baustelle, um Maschinen aus dem Werkhof einzusetzen."));
   }
 }
 
-// Automatisches Neuzeichnen (Takt, neue Daten) wartet, solange ein Finger oder die Maus gedrückt ist.
-// Sonst wird das Element unter dem Finger ersetzt und der Klick geht verloren.
-function softRender(){
-  if(pressing && Date.now() - pressStart < 4000) return;
-  render();
+function renderList(){
+  const box = $("siteList");
+  const q = $("siteSearch").value.trim().toLowerCase();
+  box.innerHTML = "";
+  let list = sites.filter(s => showSparte(s.sparte) && (!q || s.name.toLowerCase().indexOf(q) >= 0));
+  list.sort((a, b) => RANK[siteStatus(a)] - RANK[siteStatus(b)] || a.name.localeCompare(b.name, "de"));
+  if(!list.length){
+    box.appendChild(el("div", "empty", sites.length ? "Keine Baustelle gefunden." : (LIVE ? "Noch keine Baustellen." : "")));
+    return;
+  }
+  list.slice(0, 100).forEach(s=>{
+    const i = el("div", "item" + (selected === s.id ? " sel" : ""));
+    i.appendChild(el("span", "dot " + siteStatus(s)));
+    i.appendChild(el("span", "tag", TAG[s.sparte]));
+    i.appendChild(el("span", "", s.name));
+    i.onclick = ()=>selectSite(s.id);
+    box.appendChild(i);
+  });
+  if(list.length > 100) box.appendChild(el("div", "empty", "… und " + (list.length - 100) + " weitere. Nutze die Suche."));
 }
 
 function render(){
@@ -406,7 +678,7 @@ function render(){
   if(lmap){
     syncRealMarkers();
   } else {
-    const layer = document.getElementById("sites");
+    const layer = $("sites");
     layer.innerHTML = "";
     sites.forEach(s => layer.appendChild(marker(s, false)));
     layer.appendChild(marker(DEPOT, true));
@@ -416,7 +688,7 @@ function render(){
   const vm = machines.filter(m => showSparte(m.sparte));
   const c = { running:0, waiting:0, broken:0, off:0 };
   vm.forEach(m => c[m.status]++);
-  const counts = document.getElementById("counts");
+  const counts = $("counts");
   counts.innerHTML = "";
   ["running","waiting","broken","off"].forEach(k=>{
     const chip = el("span", "chip");
@@ -427,137 +699,111 @@ function render(){
 
   const active = vm.length - c.off;
   const health = active ? Math.round(100 * c.running / active) : 100;
-  const fill = document.getElementById("hudFill");
+  const fill = $("hudFill");
   fill.style.width = health + "%";
   fill.style.background = health >= 75 ? "var(--ok)" : health >= 40 ? "var(--wait)" : "var(--bad)";
-  document.getElementById("hudText").textContent = "Einsatzbereitschaft " + health + "%";
-  document.getElementById("incidents").textContent = "Störungen: " + incidents;
+  $("hudText").textContent = "Einsatzbereitschaft " + health + "%";
+  $("incidents").textContent = "Störungen: " + incidents;
 
   // Banner
-  const banner = document.getElementById("banner");
+  const banner = $("banner");
   const bad = vm.filter(m => m.status === "broken");
   if(bad.length){
     banner.className = "show";
-    banner.textContent = "⚠ Störung: " + bad.map(m => {
-      const s = siteOf(m); return m.name + (s ? " (" + s.name + ")" : "");
-    }).join(", ");
+    banner.textContent = "⚠ Störung: " + bad.slice(0, 6).map(m => m.name + where(m)).join(", ") + (bad.length > 6 ? " und " + (bad.length - 6) + " weitere" : "");
   } else banner.className = "";
 
   // Probleme
   const probs = vm.filter(m => m.status === "broken" || m.status === "waiting");
-  const pEl = document.getElementById("problems");
+  const pEl = $("problems");
   pEl.innerHTML = "";
   if(!probs.length) pEl.appendChild(el("div", "empty", "Alles in Ordnung."));
-  probs.forEach(m=>{
-    const s = siteOf(m);
+  probs.slice(0, 40).forEach(m=>{
     const i = el("div", "item");
     i.appendChild(el("span", "dot " + m.status));
-    i.appendChild(el("span", "", m.name + (s ? " (" + s.name + ")" : "") + ": " +
-      (m.status === "broken" ? "defekt" : m.reason)));
+    i.appendChild(el("span", "", m.name + where(m) + ": " + (m.status === "broken" ? "defekt" : m.reason)));
     i.onclick = ()=>selectSite(loc(m));
     pEl.appendChild(i);
   });
 
   // Protokoll
-  const lEl = document.getElementById("log");
+  const lEl = $("log");
   lEl.innerHTML = "";
   if(!logs.length) lEl.appendChild(el("div", "empty", "Noch nichts passiert."));
   logs.forEach(t => lEl.appendChild(el("div", "log", t)));
 
+  renderList();
   renderDetail();
 }
 
-/* ---------- Schnittstelle für echte Daten ---------- */
-// Später z. B. von einem Server aufrufen.
-// list = [{ id:1, status:"running", tank:80, site:"s3", reason:"" }, ...]
-function applyData(list){
-  list.forEach(d=>{
-    const m = machines.find(x => x.id === d.id);
-    if(!m) return;
-    if(typeof d.tank === "number") m.tank = d.tank;
-    if("site" in d) m.site = d.site;
-    if(d.status in LABEL) setStatus(m, d.status, d.reason || "");
-  });
-  softRender();
+// Automatisches Neuzeichnen wartet, solange ein Finger oder die Maus gedrückt ist.
+// Sonst wird das Element unter dem Finger ersetzt und der Klick geht verloren.
+function softRender(){
+  if(pressing && Date.now() - pressStart < 4000) return;
+  render();
 }
-const USE_SIMULATION = true;   // false = nur echte Daten über applyData()
 
-/* ---------- Bedienung ---------- */
-document.getElementById("soundBtn").onclick = e=>{
-  soundOn = !soundOn;
-  e.target.textContent = soundOn ? "Ton aus" : "Ton an";
-  if(soundOn) beep();
-};
-document.getElementById("failBtn").onclick = ()=>{
-  const ok = machines.filter(m => m.site && m.status === "running" && showSparte(m.sparte));
-  if(ok.length) setStatus(ok[Math.floor(Math.random() * ok.length)], "broken");
+function selectSite(id){
+  if(pickCb) return;
+  selected = id;
+  const s = findSite(id);
+  if(lmap && mapReady && s){
+    lmap.flyTo({ center:[s.lng, s.lat], zoom:Math.max(lmap.getZoom(), 14.5), pitch:is3D ? 60 : 0, duration:1200 });
+  }
   render();
-};
-document.getElementById("filters").onclick = e=>{
-  const f = e.target.getAttribute("data-f");
-  if(!f) return;
-  filter = f;
-  document.querySelectorAll("#filters button").forEach(b => b.classList.toggle("active", b === e.target));
-  render();
-};
+}
 
-/* ---------- Echte 3D-Karte (MapLibre + OpenFreeMap) ---------- */
+/* =============================================================== Karte (MapLibre + OpenFreeMap) */
 // Bewusst schlank für Handys: heller Minimal-Stil, keine 3D-Gebäude, Gelände nur als sanftes Relief.
-let lmap = null;
-let mapReady = false;
-let is3D = true;
+let lmap = null, mapReady = false, is3D = true;
 const lmarkers = {};
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
 function fallbackToSketch(){
   if(lmap){ try{ lmap.remove(); }catch(e){} }
-  lmap = null;
-  mapReady = false;
+  lmap = null; mapReady = false;
   Object.keys(lmarkers).forEach(k => delete lmarkers[k]);
-  document.getElementById("lmap").innerHTML = "";
-  document.getElementById("map").classList.remove("real");
+  $("lmap").innerHTML = "";
+  $("map").classList.remove("real");
   render();
+}
+
+function updateCompact(){
+  if(!lmap) return;
+  $("lmap").classList.toggle("compact", lmap.getZoom() < 12.3 && sites.length > 6);
 }
 
 function initRealMap(){
   if(typeof maplibregl === "undefined") return;          // ohne Internet bleibt die Skizze
   try{
-    document.getElementById("map").classList.add("real");
+    $("map").classList.add("real");
     lmap = new maplibregl.Map({
-      container: "lmap",
-      style: MAP_STYLE,
-      center: [8.85, 47.235],
-      zoom: 11.5,
-      pitch: 55,
-      bearing: -15,
-      maxPitch: 70,
-      maxZoom: 17,
-      attributionControl: { compact: true }
+      container:"lmap", style:MAP_STYLE, center:[8.85, 47.235], zoom:11.5, pitch:55, bearing:-15,
+      maxPitch:70, maxZoom:17, attributionControl:{ compact:true }
     });
-    lmap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+    lmap.addControl(new maplibregl.NavigationControl({ visualizePitch:true }), "top-right");
     lmap.on("load", ()=>{
-      if(!lmap) return;                // Karte wurde inzwischen verworfen
-      lmap.addSource("dem", {
-        type: "raster-dem",
-        tiles: [DEM_TILES],
-        encoding: "terrarium",
-        tileSize: 256,
-        maxzoom: 15,
-        attribution: "Höhendaten: Mapzen, AWS Terrain Tiles"
-      });
+      if(!lmap) return;
+      lmap.addSource("dem", { type:"raster-dem", tiles:[DEM_TILES], encoding:"terrarium", tileSize:256, maxzoom:15,
+        attribution:"Höhendaten: Mapzen, AWS Terrain Tiles" });
       const first = lmap.getStyle().layers.find(l => l.type === "symbol");
-      lmap.addLayer({
-        id: "relief", type: "hillshade", source: "dem",
-        paint: { "hillshade-exaggeration": 0.6, "hillshade-shadow-color": "#3a4350" }
-      }, first ? first.id : undefined);
+      lmap.addLayer({ id:"relief", type:"hillshade", source:"dem",
+        paint:{ "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#3a4350" } }, first ? first.id : undefined);
       mapReady = true;
       set3D(true);
       showOverview(0);
+      render();
+    });
+    lmap.on("zoom", updateCompact);
+    lmap.on("click", e=>{
+      if(!pickCb) return;
+      const cb = pickCb; pickCb = null;
+      $("map").classList.remove("picking"); $("pickBar").hidden = true;
+      cb(e.lngLat.lat, e.lngLat.lng);
     });
     // Wenn der Kartenstil nicht lädt (kein Internet, gesperrt), zurück zur Skizze
     lmap.on("error", e=>{
-      // einzelne Kachel-Fehler ignorieren, nur Fehler beim Laden des Kartenstils zählen
       if(!mapReady && !(e && (e.sourceId || e.tile))) setTimeout(fallbackToSketch, 0);
     });
     setTimeout(()=>{ if(lmap && !mapReady) fallbackToSketch(); }, 10000);
@@ -568,63 +814,441 @@ function initRealMap(){
 
 function set3D(on){
   is3D = on;
-  const b = document.getElementById("btn3d");
+  const b = $("btn3d");
   if(b) b.classList.toggle("active", on);
   if(!lmap || !mapReady) return;
-  lmap.setTerrain(on ? { source: "dem", exaggeration: 1.4 } : null);
-  lmap.easeTo({ pitch: on ? 55 : 0, bearing: on ? -15 : 0, duration: 800 });
+  lmap.setTerrain(on ? { source:"dem", exaggeration:1.4 } : null);
+  lmap.easeTo({ pitch:on ? 55 : 0, bearing:on ? -15 : 0, duration:800 });
 }
 
 function showOverview(ms){
   if(!lmap || !mapReady) return;
   const b = new maplibregl.LngLatBounds();
   sites.concat([DEPOT]).forEach(s => b.extend([s.lng, s.lat]));
-  lmap.fitBounds(b, {
-    padding: 70, maxZoom: 14,
-    pitch: is3D ? 55 : 0, bearing: is3D ? -15 : 0,
-    duration: typeof ms === "number" ? ms : 900
-  });
-}
-
-function selectSite(id){
-  selected = id;
-  const s = id === "depot" ? DEPOT : sites.find(x => x.id === id);
-  if(lmap && mapReady && s){
-    lmap.flyTo({ center: [s.lng, s.lat], zoom: 14.5, pitch: is3D ? 60 : 0, duration: 1200 });
-  }
-  render();
+  lmap.fitBounds(b, { padding:70, maxZoom:14, pitch:is3D ? 55 : 0, bearing:is3D ? -15 : 0, duration:typeof ms === "number" ? ms : 900 });
 }
 
 function syncRealMarkers(){
-  sites.concat([DEPOT]).forEach(s=>{
+  const all = sites.concat([DEPOT]);
+  Object.keys(lmarkers).forEach(id=>{
+    if(!all.some(s => s.id === id)){ lmarkers[id].remove(); delete lmarkers[id]; }
+  });
+  all.forEach(s=>{
     const content = marker(s, s.id === "depot");
     if(lmarkers[s.id]){
       const wrap = lmarkers[s.id].getElement();
       wrap.innerHTML = "";
       wrap.appendChild(content);
+      lmarkers[s.id].setLngLat([s.lng, s.lat]);
     } else {
       const wrap = document.createElement("div");
       wrap.className = "lm";
       wrap.appendChild(content);
-      lmarkers[s.id] = new maplibregl.Marker({ element: wrap, anchor: "center" })
-        .setLngLat([s.lng, s.lat]).addTo(lmap);
+      lmarkers[s.id] = new maplibregl.Marker({ element:wrap, anchor:"center" }).setLngLat([s.lng, s.lat]).addTo(lmap);
     }
     lmarkers[s.id].getElement().style.zIndex = selected === s.id ? 5 : 1;
   });
+  updateCompact();
 }
 
-document.getElementById("btn3d").onclick = ()=> set3D(!is3D);
-document.getElementById("btnOverview").onclick = ()=> showOverview();
+/* =============================================================== Formulare */
+function closeModal(){ const m = $("modal"); if(m) m.remove(); }
+function openModal(title, body, wide){
+  closeModal();
+  const ov = el("div", "overlay modalov"); ov.id = "modal";
+  const card = el("div", "card" + (wide ? " wide" : ""));
+  const h = el("div", "cardhead");
+  h.appendChild(el("h2", "", title));
+  const x = el("button", "", "Schliessen"); x.onclick = closeModal;
+  h.appendChild(x);
+  card.appendChild(h); card.appendChild(body); ov.appendChild(card);
+  document.body.appendChild(ov);
+}
+function field(label, input){
+  const l = el("label"); l.appendChild(el("span", "", label)); l.appendChild(input); return l;
+}
+function input(type, value, id){
+  const i = el("input"); i.type = type; i.value = value === undefined ? "" : value; if(id) i.id = id; i.autocomplete = "off"; return i;
+}
+function select(options, value, id){
+  const s = el("select"); if(id) s.id = id;
+  options.forEach(o=>{ const op = el("option", "", o[1]); op.value = o[0]; s.appendChild(op); });
+  s.value = value; return s;
+}
+function datalist(id, items){
+  const d = el("datalist"); d.id = id;
+  items.forEach(i=>{ const o = el("option"); o.value = i; d.appendChild(o); });
+  return d;
+}
 
-// Solange ein Finger oder die Maus gedrückt ist, wird nicht neu gezeichnet,
-// sonst gehen Klicks verloren.
+// Adresse suchen (swisstopo, kostenlos). Liefert Kartenpunkte in WGS84.
+async function searchAddress(q){
+  const url = "https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations&limit=5&sr=4326&searchText=" + encodeURIComponent(q);
+  const res = await fetch(url);
+  if(!res.ok) throw new Error("HTTP " + res.status);
+  const j = await res.json();
+  return (j.results || []).filter(r => r.attrs && typeof r.attrs.lat === "number" && typeof r.attrs.lon === "number")
+    .map(r => ({ label:String(r.attrs.label || "").replace(/<[^>]*>/g, ""), lat:r.attrs.lat, lng:r.attrs.lon }));
+}
+
+function modalSite(draft){
+  draft = draft || { name:"", sparte:"tief", mat:"", level:"100", lat:"", lng:"" };
+  const body = el("div", "form");
+  const name = input("text", draft.name, "f-name"); name.maxLength = 80;
+  const sparte = select([["garten","Gartenbau"],["strasse","Strassenbau"],["tief","Tiefbau"]], draft.sparte, "f-sparte");
+  const mat = input("text", draft.mat, "f-mat"); mat.setAttribute("list", "dl-mat"); mat.maxLength = 40;
+  const level = input("number", draft.level, "f-level"); level.min = "0"; level.max = "100"; level.style.width = "100%";
+  const lat = input("text", draft.lat, "f-lat"); lat.inputMode = "decimal";
+  const lng = input("text", draft.lng, "f-lng"); lng.inputMode = "decimal";
+  body.appendChild(field("Name der Baustelle", name));
+  body.appendChild(field("Sparte", sparte));
+  const r1 = el("div", "row2");
+  r1.appendChild(field("Hauptmaterial", mat)); r1.appendChild(field("Füllstand in %", level));
+  body.appendChild(r1); body.appendChild(datalist("dl-mat", MATERIALS));
+
+  body.appendChild(el("div", "sub", "Ort"));
+  const addr = input("search", "", "f-addr"); addr.placeholder = "Adresse oder Ort suchen";
+  const find = el("button", "", "Suchen");
+  const arow = el("div", "row2"); arow.style.gridTemplateColumns = "1fr auto"; arow.appendChild(addr); arow.appendChild(find);
+  body.appendChild(arow);
+  const results = el("div", "results"); body.appendChild(results);
+  const amsg = el("div", "msg"); body.appendChild(amsg);
+  const doSearch = async ()=>{
+    const q = addr.value.trim(); if(!q) return;
+    results.innerHTML = ""; amsg.className = "msg"; amsg.textContent = "Suche …";
+    try{
+      const list = await searchAddress(q);
+      amsg.textContent = list.length ? "Wähle einen Treffer:" : "Nichts gefunden. Tippe auf die Karte oder trage die Koordinaten ein.";
+      list.forEach(it=>{
+        const b = el("button", "", it.label);
+        b.type = "button";
+        b.onclick = ()=>{ lat.value = it.lat.toFixed(5); lng.value = it.lng.toFixed(5); results.innerHTML = ""; amsg.className = "msg ok"; amsg.textContent = "Ort übernommen."; };
+        results.appendChild(b);
+      });
+    }catch(e){
+      amsg.className = "msg err";
+      amsg.textContent = "Die Adresssuche ist gerade nicht erreichbar. Tippe auf die Karte oder trage die Koordinaten ein.";
+    }
+  };
+  find.type = "button"; find.onclick = doSearch;
+  addr.addEventListener("keydown", e=>{ if(e.key === "Enter"){ e.preventDefault(); doSearch(); } });
+
+  const r2 = el("div", "row2");
+  r2.appendChild(field("Breitengrad", lat)); r2.appendChild(field("Längengrad", lng));
+  body.appendChild(r2);
+
+  const collect = ()=>({ name:name.value, sparte:sparte.value, mat:mat.value, level:level.value, lat:lat.value, lng:lng.value });
+  if(lmap && mapReady){
+    const pick = el("button", "", "Ort auf der Karte wählen"); pick.type = "button";
+    pick.onclick = ()=>{
+      const d = collect();
+      pickDraft = d;
+      closeModal();
+      $("pickBar").hidden = false; $("map").classList.add("picking");
+      $("map").scrollIntoView({ behavior:"smooth", block:"center" });
+      pickCb = (la, ln)=>{ d.lat = la.toFixed(5); d.lng = ln.toFixed(5); modalSite(d); };
+    };
+    body.appendChild(pick);
+  }
+
+  const msg = el("div", "msg"); body.appendChild(msg);
+  const save = el("button", "primary", "Baustelle speichern"); save.type = "button";
+  save.onclick = async ()=>{
+    const v = collect();
+    const nm = v.name.trim();
+    const la = Number(String(v.lat).replace(",", ".")), ln = Number(String(v.lng).replace(",", "."));
+    const lv = Number(v.level);
+    msg.className = "msg err";
+    if(!nm){ msg.textContent = "Bitte einen Namen eingeben."; return; }
+    if(String(v.lat).trim() === "" || String(v.lng).trim() === "" || !isFinite(la) || !isFinite(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180){
+      msg.textContent = "Bitte einen gültigen Ort wählen (Adresse suchen, Karte antippen oder Koordinaten eintragen)."; return;
+    }
+    if(!isFinite(lv) || lv < 0 || lv > 100){ msg.textContent = "Der Füllstand muss zwischen 0 und 100 liegen."; return; }
+    save.disabled = true;
+    const ok = await createSite({ name:nm, sparte:v.sparte, mat:v.mat.trim(), level:lv, lat:la, lng:ln });
+    save.disabled = false;
+    if(ok) closeModal();
+  };
+  body.appendChild(save);
+  openModal("Neue Baustelle", body);
+}
+
+function modalMachine(){
+  const body = el("div", "form");
+  const name = input("text", "", "m-name"); name.maxLength = 80;
+  const typ = input("text", "", "m-typ"); typ.setAttribute("list", "dl-typ"); typ.maxLength = 40;
+  const sparte = select([["garten","Gartenbau"],["strasse","Strassenbau"],["tief","Tiefbau"]], "tief", "m-sparte");
+  const siteSel = select([["", "Werkhof (nicht im Einsatz)"]].concat(sites.map(s => [s.id, s.name])), selected && selected !== "depot" ? selected : "", "m-site");
+  body.appendChild(field("Name der Maschine", name));
+  body.appendChild(field("Art (z. B. Bagger)", typ)); body.appendChild(datalist("dl-typ", TYPEN));
+  body.appendChild(field("Sparte", sparte));
+  body.appendChild(field("Standort", siteSel));
+  const msg = el("div", "msg"); body.appendChild(msg);
+  const save = el("button", "primary", "Maschine speichern"); save.type = "button";
+  save.onclick = async ()=>{
+    const nm = name.value.trim();
+    if(!nm){ msg.className = "msg err"; msg.textContent = "Bitte einen Namen eingeben."; return; }
+    save.disabled = true;
+    const ok = await createMachine({ name:nm, typ:typ.value.trim(), sparte:sparte.value, site:siteSel.value || null });
+    save.disabled = false;
+    if(ok) closeModal();
+  };
+  body.appendChild(save);
+  openModal("Neue Maschine", body);
+}
+
+async function modalUsers(){
+  const body = el("div");
+  body.appendChild(el("div", "empty", "Lade …"));
+  openModal("Benutzer", body, true);
+  const r = await sb.from("profiles").select("*").order("created_at", { ascending:true });
+  body.innerHTML = "";
+  if(r.error){ body.appendChild(el("div", "msg err", "Laden fehlgeschlagen: " + r.error.message)); return; }
+  body.appendChild(el("p", "muted", "Neue Personen sehen nichts, bis du sie freigibst."));
+  r.data.forEach(p=>{
+    const row = el("div", "urow");
+    const t = el("div");
+    t.appendChild(el("div", "", (p.name || p.email) + (me && p.id === me.id ? " (du)" : "")));
+    t.appendChild(el("div", "muted", p.email + " · " + (p.approved ? "freigegeben" : "wartet") + " · " + (p.role === "admin" ? "Admin" : "Mitarbeiter")));
+    row.appendChild(t);
+    const acts = el("div", "acts");
+    if(!(me && p.id === me.id)){
+      const ap = el("button", p.approved ? "" : "primary", p.approved ? "Sperren" : "Freigeben");
+      ap.onclick = async ()=>{
+        const u = await sb.from("profiles").update({ approved:!p.approved }).eq("id", p.id);
+        if(u.error) toast("Fehlgeschlagen: " + u.error.message, true); else modalUsers();
+      };
+      acts.appendChild(ap);
+      const ro = el("button", "", p.role === "admin" ? "Zu Mitarbeiter" : "Zu Admin");
+      ro.onclick = async ()=>{
+        const u = await sb.from("profiles").update({ role:p.role === "admin" ? "mitarbeiter" : "admin" }).eq("id", p.id);
+        if(u.error) toast("Fehlgeschlagen: " + u.error.message, true); else modalUsers();
+      };
+      acts.appendChild(ro);
+    }
+    row.appendChild(acts);
+    body.appendChild(row);
+  });
+}
+
+/* =============================================================== Live: Anmeldung, Laden, Echtzeit */
+function setAuthMode(signup){
+  $("authTitle").textContent = signup ? "Konto anlegen" : "Anmelden";
+  $("nameRow").hidden = !signup;
+  $("authGo").textContent = signup ? "Konto anlegen" : "Anmelden";
+  $("authToggle").textContent = signup ? "Schon ein Konto? Anmelden" : "Neu hier? Konto anlegen";
+  $("aPass").autocomplete = signup ? "new-password" : "current-password";
+  $("authMsg").textContent = ""; $("authMsg").className = "msg";
+  $("authForm").dataset.signup = signup ? "1" : "";
+}
+
+function authMsg(text, kind){ const m = $("authMsg"); m.textContent = text; m.className = "msg" + (kind ? " " + kind : ""); }
+
+async function handleAuthSubmit(e){
+  e.preventDefault();
+  const signup = !!$("authForm").dataset.signup;
+  const mail = $("aMail").value.trim(), pass = $("aPass").value, nm = $("aName").value.trim();
+  if(!mail || pass.length < 8){ authMsg("Bitte E-Mail und ein Passwort mit mindestens 8 Zeichen eingeben.", "err"); return; }
+  $("authGo").disabled = true; authMsg("Einen Moment …");
+  try{
+    if(signup){
+      const r = await sb.auth.signUp({ email:mail, password:pass, options:{ data:{ name:nm } } });
+      if(r.error){ authMsg(r.error.message, "err"); }
+      else if(!r.data.session){ setAuthMode(false); authMsg("Fast geschafft: Bitte bestätige deine E-Mail über den Link, den wir dir geschickt haben. Danach kannst du dich anmelden.", "ok"); }
+    } else {
+      const r = await sb.auth.signInWithPassword({ email:mail, password:pass });
+      if(r.error) authMsg(r.error.message === "Invalid login credentials" ? "E-Mail oder Passwort stimmt nicht." : r.error.message, "err");
+    }
+  }catch(err){
+    authMsg("Keine Verbindung. Bitte Internet prüfen.", "err");
+  }
+  $("authGo").disabled = false;
+}
+
+function stopLive(){
+  if(channel){ try{ sb.removeChannel(channel); }catch(e){} channel = null; }
+  sites = []; machines = []; logs.length = 0; seenLog.clear(); selected = null;
+  me = null; subscribedOnce = false; didOverview = false;
+  $("conn").hidden = true;
+}
+
+async function handleSession(session){
+  if(!session){
+    stopLive();
+    setAuthMode(false); $("aPass").value = "";
+    $("pending").hidden = true; $("auth").hidden = false;
+    ["usersBtn","logoutBtn","userChip"].forEach(id => $(id).hidden = true);
+    render();
+    return;
+  }
+  const r = await sb.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
+  if(r.error || !r.data){
+    $("auth").hidden = true; $("pending").hidden = false;
+    $("pendingText").textContent = "Dein Profil konnte nicht geladen werden" + (r.error ? ": " + r.error.message : ".") + " Bitte melde dich neu an oder frage den Admin.";
+    return;
+  }
+  me = { id:r.data.id, email:r.data.email, name:r.data.name || r.data.email, role:r.data.role, approved:r.data.approved };
+  $("auth").hidden = true;
+  $("logoutBtn").hidden = false; $("userChip").hidden = false; $("userChip").textContent = me.name;
+  if(!me.approved){
+    $("pending").hidden = false;
+    $("pendingText").textContent = "Dein Konto (" + me.email + ") ist angelegt. Eine Person mit Admin-Rechten muss dich freigeben, bevor du Daten siehst.";
+    $("usersBtn").hidden = true;
+    return;
+  }
+  $("pending").hidden = true;
+  $("usersBtn").hidden = me.role !== "admin";
+  await loadAll();
+  subscribe();
+}
+
+async function loadAll(){
+  if(!sb || !me) return;
+  const res = await Promise.all([
+    sb.from("sites").select("*").order("name"),
+    sb.from("machines").select("*").order("name"),
+    sb.from("activity").select("*").order("created_at", { ascending:false }).limit(8)
+  ]);
+  const err = res[0].error || res[1].error || res[2].error;
+  if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
+  sites = res[0].data.map(mapSite);
+  machines = res[1].data.map(mapMachine);
+  logs.length = 0; seenLog.clear();
+  res[2].data.slice().reverse().forEach(r => pushLog(r.text, r.created_at, r.id));
+  if(selected && !findSite(selected)) selected = null;
+  if(!selected && sites.length) selected = sites[0].id;
+  render();
+  if(!didOverview){ didOverview = true; showOverview(); }   // nur beim ersten Laden, nicht bei jedem Nachladen
+}
+
+function setConn(ok){
+  const c = $("conn");
+  c.hidden = false;
+  c.textContent = ok ? "● live" : "○ getrennt";
+  c.style.color = ok ? "var(--ok)" : "var(--wait)";
+}
+
+function subscribe(){
+  if(channel) return;
+  const ch = sb.channel("dashboard");
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"sites" }, p=>{
+    if(p.eventType === "DELETE") sites = sites.filter(s => s.id !== p.old.id); else upsertSite(mapSite(p.new));
+    softRender();
+  });
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"machines" }, p=>{
+    if(p.eventType === "DELETE"){ machines = machines.filter(m => m.id !== p.old.id); }
+    else {
+      const n = mapMachine(p.new);
+      const old = machines.find(m => m.id === n.id);
+      const was = old ? old.status : null;
+      upsertMachine(n);
+      if(was !== null && was !== "broken" && n.status === "broken") onBreak();   // Störung von einem anderen Handy
+    }
+    softRender();
+  });
+  ch.on("postgres_changes", { event:"INSERT", schema:"public", table:"activity" }, p=>{
+    pushLog(p.new.text, p.new.created_at, p.new.id);
+    softRender();
+  });
+  ch.subscribe(status=>{
+    if(status === "SUBSCRIBED"){
+      setConn(true);
+      if(subscribedOnce) loadAll();      // nach Verbindungsabbruch verpasste Änderungen nachladen
+      subscribedOnce = true;
+    } else if(status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED"){
+      setConn(false);
+    }
+  });
+  channel = ch;
+}
+
+async function startLive(){
+  if(typeof supabase === "undefined"){
+    $("auth").hidden = false;
+    authMsg("Die Verbindung zum Datenspeicher konnte nicht geladen werden. Bitte Internet prüfen und Seite neu laden.", "err");
+    $("authGo").disabled = true;
+    return;
+  }
+  sb = supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
+  setAuthMode(false);
+  $("authForm").addEventListener("submit", handleAuthSubmit);
+  $("authToggle").onclick = ()=>setAuthMode(!$("authForm").dataset.signup);
+  $("logoutBtn").onclick = ()=>sb.auth.signOut();
+  $("pendingOut").onclick = ()=>sb.auth.signOut();
+  $("pendingCheck").onclick = async ()=>{
+    const s = await sb.auth.getSession();
+    handleSession(s.data.session);
+  };
+  $("usersBtn").onclick = modalUsers;
+  sb.auth.onAuthStateChange((ev, session)=>{
+    if(ev === "SIGNED_OUT") setTimeout(()=>handleSession(null), 0);
+    else if(ev === "SIGNED_IN" && (!me || !session || session.user.id !== me.id)) setTimeout(()=>handleSession(session), 0);
+  });
+  const s = await sb.auth.getSession();
+  handleSession(s.data.session || null);
+}
+
+/* =============================================================== Demo: Simulation */
+function tick(){
+  sites.forEach(s=>{
+    const r = machines.filter(m => m.site === s.id && m.status === "running").length;
+    s.material.level = Math.max(0, s.material.level - r * (0.5 + Math.random() * 0.8));
+  });
+  machines.forEach(m=>{
+    if(m.status !== "running") return;
+    const s = siteOf(m);
+    m.tank = Math.max(0, m.tank - (1 + Math.random() * 2));
+    if(s && s.material.level <= 15) setMachine(m, { status:"waiting", reason:"Material fehlt: " + s.material.name }, m.name + ": Material fehlt" + where(m));
+    else if(m.tank <= 15) setMachine(m, { status:"waiting", reason:"Diesel leer" }, m.name + ": Diesel leer" + where(m));
+    else if(Math.random() < 0.004) setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m));
+  });
+  softRender();
+}
+
+/* =============================================================== Start */
+$("soundBtn").onclick = e=>{
+  soundOn = !soundOn;
+  e.target.textContent = soundOn ? "Ton aus" : "Ton an";
+  if(soundOn) beep();
+};
+$("failBtn").onclick = ()=>{
+  const ok = machines.filter(m => m.site && m.status === "running" && showSparte(m.sparte));
+  if(ok.length){ const m = ok[Math.floor(Math.random() * ok.length)]; setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m)); }
+};
+$("filters").onclick = e=>{
+  const f = e.target.getAttribute("data-f");
+  if(!f) return;
+  filter = f;
+  document.querySelectorAll("#filters button").forEach(b => b.classList.toggle("active", b === e.target));
+  render();
+};
+$("siteSearch").addEventListener("input", renderList);
+$("btn3d").onclick = ()=>set3D(!is3D);
+$("btnOverview").onclick = ()=>showOverview();
+$("addSiteBtn").onclick = ()=>modalSite();
+$("addMachineBtn").onclick = ()=>modalMachine();
+$("pickCancel").onclick = ()=>{ pickCb = null; $("pickBar").hidden = true; $("map").classList.remove("picking"); modalSite(pickDraft || undefined); };
+
+// Solange ein Finger oder die Maus gedrückt ist, wird nicht automatisch neu gezeichnet.
 document.addEventListener("pointerdown", ()=>{ pressing = true; pressStart = Date.now(); }, true);
 document.addEventListener("pointercancel", ()=>{ pressing = false; }, true);
 document.addEventListener("pointerup", ()=>{ setTimeout(()=>{ pressing = false; render(); }, 0); }, true);
 
-initRealMap();
-render();
-if(USE_SIMULATION) setInterval(tick, 1500);
+if(LIVE){
+  $("failBtn").hidden = true;
+  $("incidents").hidden = true;
+  // Hinzufügen ist erst nach der Anmeldung möglich: bis dahin Overlay
+  initRealMap();
+  render();
+  startLive();
+} else {
+  $("demoNote").hidden = false;
+  $("failBtn").hidden = false;
+  loadDemo();
+  initRealMap();
+  render();
+  setInterval(tick, 1500);
+}
 </script>
 </body>
 </html>

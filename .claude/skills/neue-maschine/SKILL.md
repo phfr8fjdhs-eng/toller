@@ -5,16 +5,25 @@ description: Anleitung, um eine neue Maschine ins Baustellen-Dashboard einzubaue
 
 # Neue Maschine einbauen
 
-1. Öffne `public/index.html` und suche die Liste `machines`.
-2. Füge einen neuen Eintrag hinzu:
-   - `id`: nächste freie Nummer
-   - `name`: kurzer, klarer Name (z. B. "Bagger 3")
-   - `typ`: Art der Maschine (Bagger, Walze, Fertiger, Dumper, LKW, Radlader ...)
+Im Live-Modus legen Mitarbeiter Maschinen selbst in der Seite an (Knopf "+ Maschine"). Dafür ist kein Code nötig.
+
+## Nur wenn der Nutzer Code ändern will
+
+**Neue Maschinenart (Vorschlagsliste):**
+1. Öffne `public/index.html` und suche `TYPEN`.
+2. Füge die Art als Text hinzu, zum Beispiel `"Kehrmaschine"`.
+
+**Demo-Daten:**
+1. Suche in `public/index.html` die Funktion `loadDemo` und die Hilfsfunktion `M(...)`.
+2. Füge eine Zeile hinzu: `M(id, name, typ, sparte, site, status, tank)`.
    - `sparte`: `"garten"`, `"strasse"` oder `"tief"`
-   - `site`: Id einer Baustelle oder `null` (dann steht sie im Werkhof)
-   - `status`: `"running"` wenn auf einer Baustelle, sonst `"off"`
-   - `tank`: Zahl von 0 bis 100
-   - `reason`: leer lassen (`""`)
-3. Halte dich an die Status-Farben aus CLAUDE.md und ändere keine Farben.
-4. Öffne die Seite: Die Maschine muss auf der richtigen Baustelle (oder im Werkhof) erscheinen und auf Klick reagieren.
-5. Mache einen Commit auf Deutsch, z. B. "Maschine Bagger 3 hinzugefügt".
+   - `site`: Id einer Demo-Baustelle oder `null` (Werkhof)
+   - `status`: `"running"` auf einer Baustelle, sonst `"off"`
+
+**Neues Feld an Maschinen (zum Beispiel Kennzeichen):**
+1. `supabase/schema.sql`: Spalte bei `machines` ergänzen (mit `alter table ... add column if not exists`, damit bestehende Datenbanken funktionieren).
+2. `public/index.html`: `mapMachine`, `dbMachine`, `createMachine` und das Formular `modalMachine` anpassen.
+3. Zugriffsregeln prüfen und `tests/db_test.sh` sowie `tests/app_test.py` ergänzen.
+
+Danach Tests laufen lassen, im Browser prüfen und mit einem Commit auf Deutsch speichern, zum Beispiel "Kennzeichen bei Maschinen ergänzt".
+Status-Farben aus `CLAUDE.md` nicht ändern.

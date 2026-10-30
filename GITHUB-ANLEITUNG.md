@@ -117,11 +117,11 @@ Wichtig: Prüfe vor der Wahl die Preise und Nutzungsbedingungen. Manche Gratis-S
 - Die Seite zeigt eine schlanke 3D-Karte mit MapLibre. Den Kartenstil liefert OpenFreeMap (ohne Schlüssel), die Höhendaten kommen von AWS Terrain Tiles. Dafür braucht sie Internet, sonst erscheint die Skizze.
 - Die Karte ist absichtlich einfach gehalten (kein 3D-Gebäude-Modell), damit sie auf Handys flüssig läuft. Mit dem Knopf "3D" schaltest du auf eine flache Ansicht.
 - Prüfe vor dem Firmenbetrieb die Nutzungsbedingungen von OpenFreeMap (openfreemap.org/tos). Alternativen sind swisstopo (für die Schweiz) oder ein bezahlter Kartenanbieter.
-- Die echten Positionen der Baustellen stehen als `lat` und `lng` in `public/index.html`. Später können sie aus den Adressen berechnet werden.
+- Baustellen legst du in der Seite an (Adresssuche, Kartenklick oder Koordinaten). Die Positionen stehen in der Datenbank (`lat`, `lng`).
 
 ## Reihenfolge (Vorschlag)
 1. GitHub einrichten und Repo hochladen (Schritte 1 bis 3 oben)
-2. Seite online stellen (nur der Prototyp, noch mit Simulation)
-3. Datenbank mit Echtzeit und Login anbinden
+2. Seite online stellen (zuerst im Demo-Modus)
+3. Supabase einrichten (Datenbank, Login, Echtzeit): siehe `SUPABASE-ANLEITUNG.md`
 4. Echte Baustellen und Maschinen eintragen
 5. Push-Nachrichten für Störungen

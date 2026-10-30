@@ -5,14 +5,22 @@ description: Anleitung, um eine neue Baustelle ins Baustellen-Dashboard einzubau
 
 # Neue Baustelle einbauen
 
-1. Öffne `public/index.html` und suche die Liste `sites`.
-2. Füge einen neuen Eintrag hinzu:
-   - `id`: neue, eindeutige Id (z. B. `"s6"`)
-   - `name`: Name der Baustelle
-   - `sparte`: `"garten"`, `"strasse"` oder `"tief"`
-   - `material`: `{ name: "Kies", level: 100 }` mit dem wichtigsten Material
-   - `x`, `y`: Position in Prozent auf der Skizze (0-100), nicht zu nah an einer anderen Baustelle
-   - `lat`, `lng`: echte Koordinaten für die Karte (Breitengrad, Längengrad)
-3. Weise Maschinen zu, indem du bei `machines` die Id bei `site` einträgst.
-4. Prüfe, dass sich keine Marker überlappen und die Baustelle den schlechtesten Status ihrer Maschinen zeigt.
-5. Mache einen Commit auf Deutsch, z. B. "Baustelle Kreisel Ost hinzugefügt".
+Im Live-Modus legen Mitarbeiter Baustellen selbst in der Seite an (Knopf "+ Baustelle"): Name, Sparte, Material, Ort per Adresssuche,
+Kartenklick oder Koordinaten. Dafür ist kein Code nötig.
+
+## Nur wenn der Nutzer Code ändern will
+
+**Neues Material in der Vorschlagsliste:**
+1. Öffne `public/index.html` und suche `MATERIALS`.
+2. Füge das Material als Text hinzu.
+
+**Demo-Daten:**
+1. Suche in `public/index.html` die Funktion `loadDemo` und die Liste `sites`.
+2. Füge einen Eintrag hinzu mit `id`, `name`, `sparte`, `material:{name, level}`, `x`, `y` (Prozent auf der Skizze) und `lat`, `lng` (echte Position).
+3. Prüfe, dass sich Marker auf der Skizze nicht überlappen.
+
+**Beispieldaten in der Datenbank:** `supabase/beispieldaten.sql` ergänzen (alle Namen erfunden).
+
+**Werkhof verschieben:** `depot` in `public/config.js` ändern.
+
+Danach Tests laufen lassen, im Browser prüfen und mit einem Commit auf Deutsch speichern, zum Beispiel "Beispielbaustelle Kreisel Ost ergänzt".
