@@ -261,7 +261,7 @@ const DEPOT = { id:"depot", name:"Werkhof", sparte:null, lat:CFG.depot.lat, lng:
 let sites = [];        // { id, name, sparte, material:{name,level}, lat, lng, x?, y? }
 let machines = [];     // { id, name, typ, sparte, site (Baustellen-Id oder null), status, tank, reason }
 let selected = null;
-let filter = "all";
+const filter = new Set();      // gewählte Sparten, leer = alle (Mehrfachauswahl)
 let incidents = 0;
 let pressing = false, pressStart = 0;
 let localId = 0;
@@ -307,7 +307,7 @@ const $ = id => document.getElementById(id);
 const loc = m => m.site || "depot";
 const siteOf = m => sites.find(s => s.id === m.site) || null;
 const findSite = id => id === "depot" ? DEPOT : sites.find(s => s.id === id) || null;
-const showSparte = sp => filter === "all" || sp === filter;
+const showSparte = sp => filter.size === 0 || filter.has(sp);
 const isAdmin = () => !LIVE || (me && me.role === "admin");
 const where = m => { const s = siteOf(m); return s ? " (" + s.name + ")" : ""; };
 const timeStr = d => new Date(d).toLocaleTimeString("de-CH", { hour:"2-digit", minute:"2-digit", second:"2-digit" });
@@ -1366,13 +1366,27 @@ $("failBtn").onclick = ()=>{
   const ok = machines.filter(m => m.site && m.status === "running" && showSparte(m.sparte));
   if(ok.length){ const m = ok[Math.floor(Math.random() * ok.length)]; setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m)); }
 };
+// Sparten-Filter mit Mehrfachauswahl: jede Sparte einzeln an- und abwählen, "Alle" setzt zurück.
+// Sind alle drei gewählt, ist das dasselbe wie "Alle".
+function renderFilters(){
+  document.querySelectorAll("#filters button").forEach(b=>{
+    const f = b.getAttribute("data-f");
+    const on = f === "all" ? filter.size === 0 : filter.has(f);
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
 $("filters").onclick = e=>{
   const f = e.target.getAttribute("data-f");
   if(!f) return;
-  filter = f;
-  document.querySelectorAll("#filters button").forEach(b => b.classList.toggle("active", b === e.target));
+  if(f === "all") filter.clear();
+  else if(filter.has(f)) filter.delete(f);
+  else filter.add(f);
+  if(filter.size === Object.keys(SPARTEN).length) filter.clear();
+  renderFilters();
   render();
 };
+renderFilters();
 $("siteSearch").addEventListener("input", renderList);
 $("btn3d").onclick = ()=>set3D(!is3D);
 $("btnOverview").onclick = ()=>showOverview();
