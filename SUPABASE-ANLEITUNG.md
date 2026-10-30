@@ -27,6 +27,8 @@ Solange du das nicht gemacht hast, läuft die Seite im **Demo-Modus** mit erfund
 1. **Authentication**, dann **URL Configuration**:
    - **Site URL:** die Adresse deiner Netlify-Seite (zum Beispiel `https://bespoke-sprite-674b0f.netlify.app`).
      Ohne das zeigen die Bestätigungs-Mails auf eine falsche Adresse.
+   - **Redirect URLs:** dieselbe Adresse noch einmal eintragen (mit `/**` am Ende, zum Beispiel `https://bespoke-sprite-674b0f.netlify.app/**`).
+     Der Link in der Mail "Passwort vergessen" führt sonst nicht zurück auf die Seite.
 2. **Authentication**, dann **Sign In / Providers**, dann **Email**: "Confirm email" eingeschaltet lassen.
 3. Hinweis: Der Mail-Versand von Supabase ist im Standard stark begrenzt. Wenn viele Mitarbeiter sich gleichzeitig registrieren,
    braucht es später einen eigenen Mail-Server (SMTP). Alternativ legst du Personen unter **Authentication, Users, Add user** selbst an.
@@ -100,4 +102,6 @@ alter table public.machines drop column if exists tank;
 - **"permission denied" oder leere Listen:** Du bist noch nicht freigegeben, oder `schema.sql` fehlt.
 - **Kein "live" oben, Änderungen erscheinen erst nach Neuladen:** Echtzeit ist nicht aktiv. Führe `schema.sql` noch einmal aus
   und prüfe unter **Database, Publications**, ob `sites`, `machines`, `needs`, `materials` und `activity` bei `supabase_realtime` aufgelistet sind.
+- **"Passwort vergessen": Link führt auf eine falsche Seite oder meldet "abgelaufen":** Site URL und Redirect URLs prüfen (Schritt 3). Der Link gilt nur einmal und etwa eine Stunde. Danach unter "Passwort vergessen?" einen neuen anfordern. Nach dem Klick auf den Link kommt zuerst "Neues Passwort", erst danach die Daten.
+- **"Passwort vergessen": die Mail kommt nicht:** Spam-Ordner, und wie oben: Der Standard-Versand von Supabase ist stark begrenzt, für den Firmenbetrieb braucht es einen eigenen Mail-Server (SMTP). Die Seite antwortet absichtlich immer gleich, ob es die Adresse gibt oder nicht. Notlösung: unter **Authentication, Users** das Passwort der Person selbst setzen.
 - **Bestätigungs-Mail kommt nicht:** Spam-Ordner prüfen, Site URL prüfen, oder die Person unter **Authentication, Users** selbst anlegen.

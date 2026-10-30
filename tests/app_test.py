@@ -493,6 +493,59 @@ with sync_playwright() as p:
     check("Live: Baustelle geloescht", pg.evaluate("window.__db.sites.some(s=>s.name=='Kanal Jona')") is False)
     check("Live: Maschine der Baustelle im Werkhof", pg.evaluate("window.__db.machines[0].site_id") is None and pg.evaluate("window.__db.machines[0].status") == "off")
 
+    # ============================================================ PASSWORT VERGESSEN
+    print("=== PASSWORT VERGESSEN ===")
+    SEED = "(()=>{const d=window.__db; d.users['chef@firma.test']={id:'u1',email:'chef@firma.test',password:'altes-passwort'}; d.profiles.push({id:'u1',email:'chef@firma.test',name:'Chef',role:'admin',approved:true}); d.sites.push({id:'a',name:'Testweg',sparte:'tief',lat:47.23,lng:8.83});})();"
+    pv = new_page(b, True); pv.add_init_script(SEED); pv.goto(URL + "?modus=leicht"); pv.wait_for_timeout(600)
+    check("Passwort: im Login steht 'Passwort vergessen?' (grosser Knopf)", pv.locator("#forgotBtn").is_visible() and pv.evaluate("document.querySelector('#forgotBtn').getBoundingClientRect().height") >= 40)
+    pv.fill("#aMail", "chef@firma.test"); pv.click("#forgotBtn")
+    check("Passwort: Ansicht ohne Passwortfeld, E-Mail bleibt stehen, passender Knopf", pv.locator("#passRow").is_hidden() and pv.input_value("#aMail") == "chef@firma.test" and pv.inner_text("#authGo") == "Link zum Zurücksetzen senden" and pv.inner_text("#authTitle") == "Passwort vergessen" and pv.locator("#forgotBtn").is_hidden())
+    pv.fill("#aMail", ""); pv.click("#authGo")
+    check("Passwort: ohne E-Mail wird nichts gesendet", "E-Mail-Adresse" in pv.inner_text("#authMsg") and len(pv.evaluate("window.__db.resets")) == 0)
+    pv.fill("#aMail", "chef@firma.test"); pv.click("#authGo"); pv.wait_for_timeout(300)
+    msg_known = pv.inner_text("#authMsg")
+    rs = pv.evaluate("window.__db.resets")
+    check("Passwort: E-Mail-Anforderung geht an Supabase, mit Rueckkehr-Adresse dieser Seite", len(rs) == 1 and rs[0]["email"] == "chef@firma.test" and rs[0]["redirectTo"].endswith("index.html"), str(rs))
+    pv.fill("#aMail", "gibtsnicht@firma.test"); pv.click("#authGo"); pv.wait_for_timeout(300)
+    check("Passwort: gleiche Antwort fuer bekannte und unbekannte Adresse (man kann nicht erraten, wer ein Konto hat)", pv.inner_text("#authMsg") == msg_known and "unterwegs" in msg_known and "Spam" in msg_known, msg_known)
+    pv.evaluate("window.__db.failReset = {message:'For security purposes, you can only request this after 60 seconds.', status:429}")
+    pv.click("#authGo"); pv.wait_for_timeout(300)
+    check("Passwort: zu schnell wiederholt -> verstaendliche Meldung", "eine Minute warten" in pv.inner_text("#authMsg"), pv.inner_text("#authMsg"))
+    pv.click("#authToggle")
+    check("Passwort: Zurueck zur Anmeldung zeigt wieder Passwortfeld und 'Passwort vergessen?'", pv.locator("#passRow").is_visible() and pv.locator("#forgotBtn").is_visible() and pv.inner_text("#authGo") == "Anmelden")
+    pv.click("#authToggle")
+    check("Passwort: Konto anlegen blendet 'Passwort vergessen?' aus", pv.locator("#forgotBtn").is_hidden() and pv.locator("#nameRow").is_visible())
+
+    # Klick auf den Link in der Mail: zuerst neues Passwort, noch keine Daten
+    rc = new_page(b, True); rc.add_init_script(SEED + "window.__db.session={user:{id:'u1',email:'chef@firma.test'}};")
+    rc.goto(URL + "?modus=leicht#access_token=abc&refresh_token=def&type=recovery"); rc.wait_for_timeout(700)
+    check("Passwort Link: zuerst 'Neues Passwort', E-Mail-Feld weg, kein Dashboard", rc.inner_text("#authTitle") == "Neues Passwort" and rc.locator("#auth").is_visible() and rc.locator("#mailRow").is_hidden() and rc.locator("#siteList .item").count() == 0 and rc.evaluate("sites.length") == 0)
+    rc.fill("#aPass", "kurz"); rc.click("#authGo")
+    check("Passwort Link: kurzes Passwort wird abgelehnt", "mindestens 8" in rc.inner_text("#authMsg") and rc.evaluate("window.__db.passwordChanges || 0") == 0)
+    rc.fill("#aPass", "altes-passwort"); rc.click("#authGo"); rc.wait_for_timeout(300)
+    check("Passwort Link: gleiches Passwort wie vorher wird mit klarer Meldung abgelehnt", "anders sein als das alte" in rc.inner_text("#authMsg") and rc.locator("#auth").is_visible(), rc.inner_text("#authMsg"))
+    rc.fill("#aPass", "neues-passwort-1"); rc.click("#authGo"); rc.wait_for_timeout(700)
+    check("Passwort Link: neues Passwort gespeichert, danach Dashboard mit Daten", rc.evaluate("window.__db.users['chef@firma.test'].password") == "neues-passwort-1" and rc.locator("#auth").is_hidden() and rc.locator("#siteList .item").count() == 1 and "Passwort geändert" in rc.inner_text("#toast"))
+    rc.click("#logoutBtn"); rc.wait_for_timeout(300)
+    rc.fill("#aMail", "chef@firma.test"); rc.fill("#aPass", "altes-passwort"); rc.click("#authGo"); rc.wait_for_timeout(400)
+    check("Passwort: das alte Passwort geht danach nicht mehr", rc.locator("#auth").is_visible() and "stimmt nicht" in rc.inner_text("#authMsg"))
+    rc.fill("#aPass", "neues-passwort-1"); rc.click("#authGo"); rc.wait_for_timeout(600)
+    check("Passwort: mit dem neuen Passwort geht die Anmeldung", rc.locator("#auth").is_hidden() and rc.locator("#siteList .item").count() == 1)
+
+    # Ereignis PASSWORD_RECOVERY (ohne Adresse mit Hash) und 'Später ändern'
+    ev = new_page(b, True); ev.add_init_script(SEED); ev.goto(URL + "?modus=leicht"); ev.wait_for_timeout(500)
+    ev.evaluate("window.__db.recoverAs('chef@firma.test')"); ev.wait_for_timeout(600)
+    check("Passwort Ereignis: PASSWORD_RECOVERY zeigt ebenfalls zuerst 'Neues Passwort'", ev.inner_text("#authTitle") == "Neues Passwort" and ev.locator("#siteList .item").count() == 0)
+    check("Passwort Ereignis: 'Später ändern' statt Passwort", ev.inner_text("#authToggle") == "Später ändern")
+    ev.click("#authToggle"); ev.wait_for_timeout(600)
+    check("Passwort Ereignis: 'Später ändern' führt ins Dashboard, Passwort bleibt wie es war", ev.locator("#auth").is_hidden() and ev.locator("#siteList .item").count() == 1 and ev.evaluate("window.__db.users['chef@firma.test'].password") == "altes-passwort")
+
+    # Abgelaufener oder benutzter Link
+    ex = new_page(b, True); ex.add_init_script(SEED); ex.goto(URL + "?modus=leicht#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired"); ex.wait_for_timeout(600)
+    check("Passwort Link abgelaufen: verstaendliche Meldung und normale Anmeldung", "abgelaufen" in ex.inner_text("#authMsg") and ex.inner_text("#authTitle") == "Anmelden" and ex.locator("#forgotBtn").is_visible(), ex.inner_text("#authMsg"))
+    d_demo = new_page(b, False); d_demo.goto(URL); d_demo.wait_for_timeout(500)
+    check("Passwort: im Demo-Modus gibt es keine Anmeldung und keinen Knopf", d_demo.locator("#auth").is_hidden())
+
     # Handy-Ansicht
     mob = new_page(b, True, 390, 800)
     mob.goto(URL + "?modus=leicht"); mob.wait_for_timeout(500)

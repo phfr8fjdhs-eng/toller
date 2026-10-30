@@ -62,7 +62,7 @@
   window.__mapClick = function(lat, lng){ (handlers.click || []).forEach(cb => cb({ lngLat:{ lat, lng } })); };
 
   // ---- Supabase
-  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null };
+  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };
   const nid = () => "id" + (db.seq++);
   const me = () => db.session ? db.profiles.find(p => p.id === db.session.user.id) : null;
   const approved = () => { const m = me(); return !!(m && m.approved); };
@@ -142,6 +142,8 @@
     db.authCbs.forEach(cb => cb(user ? "SIGNED_IN" : "SIGNED_OUT", db.session));
   }
   db.signInAs = email => { const u = db.users[email]; setSession(u); };
+  // Wie nach dem Klick auf den Link in der Mail: angemeldet, dann das Ereignis PASSWORD_RECOVERY
+  db.recoverAs = email => { setSession(db.users[email]); db.authCbs.forEach(cb => cb("PASSWORD_RECOVERY", db.session)); };
 
   window.supabase = {
     createClient(){
@@ -163,7 +165,19 @@
             if(!u || u.password !== o.password) return { data:{}, error:{ message:"Invalid login credentials" } };
             setSession(u); return { data:{ session:db.session }, error:null };
           },
-          async signOut(){ setSession(null); return { error:null }; }
+          async signOut(){ setSession(null); return { error:null }; },
+          // Passwort vergessen: wie Supabase immer ohne Fehler, auch wenn es die Adresse nicht gibt
+          async resetPasswordForEmail(email, o){
+            db.resets.push({ email, redirectTo:o && o.redirectTo });
+            return db.failReset ? { data:null, error:db.failReset } : { data:{}, error:null };
+          },
+          async updateUser(o){
+            if(!db.session) return { data:null, error:{ message:"Auth session missing!" } };
+            const u = Object.values(db.users).find(x => x.id === db.session.user.id);
+            if(u.password === o.password) return { data:null, error:{ message:"New password should be different from the old password." } };
+            u.password = o.password; db.passwordChanges = (db.passwordChanges || 0) + 1;
+            return { data:{ user:{ id:u.id } }, error:null };
+          }
         },
         from(t){ return new Q(t); },
         channel(){

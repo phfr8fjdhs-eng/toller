@@ -32,6 +32,7 @@
   button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
   button.danger{border-color:var(--bad);color:#ffb3ae}
   button.linkbtn{background:none;border:0;color:var(--sel);padding:6px 0}
+  #auth button.linkbtn{min-height:44px;text-align:left}
   button:disabled{opacity:.5;cursor:default}
   .hud{display:flex;align-items:center;gap:10px;font-size:13px}
   .hudbar{width:160px;height:14px;background:#0b0f14;border:1px solid var(--line);border-radius:7px;overflow:hidden}
@@ -252,11 +253,12 @@
     <div class="cardhead"><h2 id="authTitle">Anmelden</h2></div>
     <form id="authForm" class="form" novalidate>
       <label id="nameRow" hidden>Name<input id="aName" type="text" autocomplete="name" maxlength="60"></label>
-      <label>E-Mail<input id="aMail" type="email" autocomplete="email" inputmode="email"></label>
-      <label>Passwort (mindestens 8 Zeichen)<input id="aPass" type="password" autocomplete="current-password"></label>
+      <label id="mailRow">E-Mail<input id="aMail" type="email" autocomplete="email" inputmode="email"></label>
+      <label id="passRow"><span id="passLabel">Passwort (mindestens 8 Zeichen)</span><input id="aPass" type="password" autocomplete="current-password"></label>
       <div id="authMsg" class="msg" role="status"></div>
       <button type="submit" id="authGo" class="primary">Anmelden</button>
     </form>
+    <button id="forgotBtn" type="button" class="linkbtn">Passwort vergessen?</button>
     <button id="authToggle" type="button" class="linkbtn">Neu hier? Konto anlegen</button>
   </div>
 </div>
@@ -2085,26 +2087,53 @@ async function modalUsers(){
 }
 
 /* =============================================================== Live: Anmeldung, Laden, Echtzeit */
-function setAuthMode(signup){
-  $("authTitle").textContent = signup ? "Konto anlegen" : "Anmelden";
+// Zustände: login, signup, reset (Link per E-Mail anfordern), newpass (nach dem Klick auf den Link: neues Passwort setzen)
+// true und false gelten weiter als signup und login
+function setAuthMode(mode){
+  mode = mode === true ? "signup" : (!mode || mode === "login") ? "login" : mode;
+  const signup = mode === "signup", reset = mode === "reset", np = mode === "newpass";
+  $("authTitle").textContent = signup ? "Konto anlegen" : reset ? "Passwort vergessen" : np ? "Neues Passwort" : "Anmelden";
   $("nameRow").hidden = !signup;
-  $("authGo").textContent = signup ? "Konto anlegen" : "Anmelden";
-  $("authToggle").textContent = signup ? "Schon ein Konto? Anmelden" : "Neu hier? Konto anlegen";
-  $("aPass").autocomplete = signup ? "new-password" : "current-password";
+  $("mailRow").hidden = np;
+  $("passRow").hidden = reset;
+  $("passLabel").textContent = np ? "Neues Passwort (mindestens 8 Zeichen)" : "Passwort (mindestens 8 Zeichen)";
+  $("authGo").textContent = signup ? "Konto anlegen" : reset ? "Link zum Zurücksetzen senden" : np ? "Passwort speichern" : "Anmelden";
+  $("authToggle").textContent = signup ? "Schon ein Konto? Anmelden" : reset ? "Zurück zur Anmeldung" : np ? "Später ändern" : "Neu hier? Konto anlegen";
+  $("forgotBtn").hidden = mode !== "login";
+  $("aPass").autocomplete = (signup || np) ? "new-password" : "current-password";
   $("authMsg").textContent = ""; $("authMsg").className = "msg";
+  $("authForm").dataset.mode = mode;
   $("authForm").dataset.signup = signup ? "1" : "";
 }
 
 function authMsg(text, kind){ const m = $("authMsg"); m.textContent = text; m.className = "msg" + (kind ? " " + kind : ""); }
 
+// Link aus der Mail "Passwort zurücksetzen": die Adresse enthält type=recovery. Dann kommt zuerst das neue Passwort, nicht das Dashboard.
+let recovering = /[#&]type=recovery/.test(location.hash);
+let authNote = "";                 // Hinweis, der nach dem Zurücksetzen der Anmeldeansicht stehen bleiben soll (abgelaufener Link)
+
 async function handleAuthSubmit(e){
   e.preventDefault();
-  const signup = !!$("authForm").dataset.signup;
+  const mode = $("authForm").dataset.mode || "login", signup = mode === "signup";
   const mail = $("aMail").value.trim(), pass = $("aPass").value, nm = $("aName").value.trim();
-  if(!mail || pass.length < 8){ authMsg("Bitte E-Mail und ein Passwort mit mindestens 8 Zeichen eingeben.", "err"); return; }
+  if(mode !== "newpass" && !mail){ authMsg("Bitte die E-Mail-Adresse eingeben.", "err"); return; }
+  if(mode !== "reset" && pass.length < 8){ authMsg(mode === "login" ? "Bitte E-Mail und ein Passwort mit mindestens 8 Zeichen eingeben." : "Bitte ein Passwort mit mindestens 8 Zeichen eingeben.", "err"); return; }
   $("authGo").disabled = true; authMsg("Einen Moment …");
   try{
-    if(signup){
+    if(mode === "reset"){
+      // Immer dieselbe Antwort, egal ob es die Adresse gibt (sonst lässt sich erraten, wer ein Konto hat)
+      const r = await sb.auth.resetPasswordForEmail(mail, { redirectTo:location.origin + location.pathname });
+      if(r.error && (r.error.status === 429 || /seconds|rate/i.test(r.error.message))) authMsg("Bitte eine Minute warten und es nochmals versuchen.", "err");
+      else if(r.error) authMsg("Das hat nicht geklappt: " + r.error.message, "err");
+      else authMsg("Wenn diese Adresse bei uns bekannt ist, ist eine E-Mail mit einem Link unterwegs. Bitte auch den Spam-Ordner prüfen.", "ok");
+    } else if(mode === "newpass"){
+      const r = await sb.auth.updateUser({ password:pass });
+      if(r.error) authMsg(/different from the old/i.test(r.error.message) ? "Das neue Passwort muss anders sein als das alte." : r.error.message, "err");
+      else {
+        recovering = false; $("aPass").value = ""; toast("Passwort geändert.");
+        const sess = await sb.auth.getSession(); handleSession(sess.data.session);
+      }
+    } else if(signup){
       const r = await sb.auth.signUp({ email:mail, password:pass, options:{ data:{ name:nm } } });
       if(r.error){ authMsg(r.error.message, "err"); }
       else if(!r.data.session){ setAuthMode(false); authMsg("Fast geschafft: Bitte bestätige deine E-Mail über den Link, den wir dir geschickt haben. Danach kannst du dich anmelden.", "ok"); }
@@ -2127,11 +2156,19 @@ function stopLive(){
 
 async function handleSession(session){
   if(!session){
+    recovering = false;                                     // abgelaufener oder schon benutzter Link: normal anmelden
     stopLive();
     setAuthMode(false); $("aPass").value = "";
+    if(authNote){ authMsg(authNote, "err"); authNote = ""; }
     $("pending").hidden = true; $("auth").hidden = false;
     ["usersBtn","logoutBtn","userChip"].forEach(id => $(id).hidden = true);
     render();
+    return;
+  }
+  if(recovering){                                           // Link aus der Mail: zuerst ein neues Passwort, noch keine Daten laden
+    stopLive(); $("pending").hidden = true; $("auth").hidden = false;
+    setAuthMode("newpass"); $("aPass").value = "";
+    ["usersBtn","logoutBtn","userChip"].forEach(id => $(id).hidden = true);
     return;
   }
   const r = await sb.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
@@ -2239,8 +2276,14 @@ async function startLive(){
   }
   sb = supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
   setAuthMode(false);
+  if(/error_code=otp_expired|error=access_denied/.test(location.hash)) authNote = "Der Link ist abgelaufen oder wurde schon benutzt. Bitte unten über \"Passwort vergessen?\" einen neuen anfordern.";
   $("authForm").addEventListener("submit", handleAuthSubmit);
-  $("authToggle").onclick = ()=>setAuthMode(!$("authForm").dataset.signup);
+  $("forgotBtn").onclick = ()=>{ const m = $("aMail").value; setAuthMode("reset"); $("aMail").value = m; };
+  $("authToggle").onclick = ()=>{
+    const mode = $("authForm").dataset.mode;
+    if(mode === "newpass"){ recovering = false; sb.auth.getSession().then(x => handleSession(x.data.session)); }    // Passwort später ändern: man ist über den Link schon angemeldet
+    else setAuthMode(mode === "login" ? "signup" : "login");
+  };
   $("logoutBtn").onclick = ()=>sb.auth.signOut();
   $("pendingOut").onclick = ()=>sb.auth.signOut();
   $("pendingCheck").onclick = async ()=>{
@@ -2249,7 +2292,8 @@ async function startLive(){
   };
   $("usersBtn").onclick = modalUsers;
   sb.auth.onAuthStateChange((ev, session)=>{
-    if(ev === "SIGNED_OUT") setTimeout(()=>handleSession(null), 0);
+    if(ev === "PASSWORD_RECOVERY"){ recovering = true; setTimeout(()=>handleSession(session), 0); }
+    else if(ev === "SIGNED_OUT") setTimeout(()=>handleSession(null), 0);
     else if(ev === "SIGNED_IN" && (!me || !session || session.user.id !== me.id)) setTimeout(()=>handleSession(session), 0);
   });
   const s = await sb.auth.getSession();

@@ -80,7 +80,7 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - 3D-Ansicht einmal mit echtem WebGL ansehen und die Maschinenmodelle verfeinern (three.js konnte in der Entwicklungsumgebung nicht geladen werden)
 - Standort der Mitarbeiter oder Maschinen auf der Baustelle: **noch nicht gebaut**, offene Fragen zuerst klären (Personen oder Maschinen, wer sieht es, Einwilligung und Datenschutz, nur aktuelle Position, Information der Mitarbeiter)
 - **Excel-Anbindung (bewusst später):** Excel-Tabellen mit Baustellen, Maschinen und Status sollen automatisch eingelesen werden. Entscheidungen: Excel liefert auch den Status, Excel ist dann die Quelle der Wahrheit für seine Zeilen (Handy darf diese Status nicht ändern), im Dashboard angelegte Zeilen bleiben erhalten, der Sync fasst nur Excel-Zeilen an. Datei in SharePoint/OneDrive, Sync als zeitgesteuerte Funktion in der Cloud, Leserecht nur auf eine Datei über Microsoft Graph. Die IT muss die App-Registrierung anlegen. Vorher Beispieldatei ansehen
-- Passwort-vergessen-Knopf
+- Passwort-vergessen ist gebaut (Mail-Link, dann "Neues Passwort"), aber **noch nicht gegen echtes Supabase getestet**: Site URL und Redirect URLs setzen, eigenen Mail-Server (SMTP) einrichten, einmal von Anfang bis Ende durchspielen
 - Push-Nachrichten aufs Handy bei Störung (die Seite zeigt nur etwas, solange sie offen ist)
 - Kartenanbieter für den Firmenbetrieb festlegen (Bedingungen von OpenFreeMap prüfen, Alternativen: swisstopo oder bezahlter Anbieter)
 - Supabase-Plan und Datenschutz für den Firmenbetrieb klären (Region, Backups, Pausierung)

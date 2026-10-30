@@ -24,5 +24,7 @@ Prüfe nach jeder Änderung:
 14. Speicher: Braucht die Änderung auf dem Handy mehr Arbeitsspeicher (neue Bibliothek, grosse Listen, Dinge die im Speicher bleiben, Ereignisse die nicht entfernt werden)? Lädt sie erst bei Gebrauch? Hält `tests/speicher_test.py` seine Grenzen? Nutzt neuer Code Sprachmittel, die auf alten Handys die ganze Seite lahmlegen (`\p{L}`, Lookbehind in Regex)?
 15. Offerten-Import: Landen Preise, Kundendaten oder der Rohtext irgendwo in der Datenbank oder im Protokoll? Wird alles nur mit `textContent` gezeigt? Ersetzt ein Vorschlag nie einen getippten Namen? Ist das Feld nur für Admins sichtbar?
 
+16. Anmeldung: Antwortet "Passwort vergessen" bei bekannten und unbekannten Adressen gleich? Kommt nach dem Link aus der Mail zuerst "Neues Passwort" und werden vorher keine Daten geladen? Steht nirgends ein Passwort oder Schlüssel im Code oder Protokoll?
+
 Antworte kurz auf Deutsch: was ist gut, was ist fehlerhaft, was soll geändert werden.
 Ändere selbst keinen Code.

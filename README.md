@@ -20,6 +20,7 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 - "Werkhof" schickt eine Maschine in den Werkhof zurück, bei "Aus dem Werkhof einsetzen" holst du sie auf die gewählte Baustelle
 - Oben filterst du nach Sparte, mehrere gleichzeitig sind möglich (zum Beispiel Gartenbau und Strassenbau)
 - Live-Modus: "+ Baustelle" (mit Adresssuche oder Kartenklick), "+ Maschine", Admins verwalten "Benutzer"
+- Passwort vergessen: Im Login auf "Passwort vergessen?" tippen, E-Mail eingeben, Link in der Mail öffnen, neues Passwort setzen
 - Admin: Im Fenster "Neue Baustelle" kannst du den Text einer Offerte oder Beschreibung einfügen. Du bekommst einen Vorschlag für Name, Sparte, Ort auf der Karte und Bedarf. Du prüfst und speicherst. Preise werden nicht übernommen und der Text wird nicht gespeichert (PDF: Text kopieren)
 
 ## Ordner
