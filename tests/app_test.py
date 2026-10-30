@@ -357,6 +357,62 @@ with sync_playwright() as p:
     l.wait_for_timeout(300)
     check("Leicht: nach dem Hinscrollen sind alle Szenen gezeichnet", l.locator("#sites .site .scene-ph").count() == 0, str(l.locator("#sites .site .scene-ph").count()))
     check("Leicht: Handy ohne seitliches Scrollen", not l.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
+
+    # ============================================================ 3D-Ansicht der Baustelle
+    # Achtung: three.js ist hier ein Ersatz (stubs.js). Das prueft Aufbau, Zaehlung und Aufraeumen, nicht das echte Bild.
+    print("=== 3D-ANSICHT ===")
+    check("Leicht: kein Knopf 3D-Ansicht und three.js wird nie angefordert", l.locator("#open3dBtn").count() == 0 and not any("three" in u for u in urls))
+    t = raw_page(1280, 800, stubs=True); t.goto(URL + "?modus=3d"); t.wait_for_timeout(800)
+    check("3D: Knopf 3D-Ansicht ist da, noch kein Renderer erzeugt", t.locator("#open3dBtn").count() == 1 and t.evaluate("__three.renderers.length") == 0)
+    t.click("#open3dBtn"); t.wait_for_timeout(300)
+    check("3D-Ansicht: Fenster offen, Titel mit Sparte", t.locator("#v3d").is_visible() and t.locator("#v3Title").inner_text() == "Kanal Bahnhofstr. · Tiefbau", t.locator("#v3Title").inner_text())
+    check("3D-Ansicht: ein Renderer, ein Modell je Maschine (3)", t.evaluate("__three.renderers.length") == 1 and sorted(t.evaluate("__three.machines()")) == [1, 2, 3], str(t.evaluate("__three.machines()")))
+    check("3D-Ansicht: Namensschilder und Bedarfstafel mit den offenen Texten", all(x in t.evaluate("__three.texts") for x in ["Bagger 1", "Minibagger 1", "Dumper 1", "Bedarf", "• 20 m³ Kies bis Mittwoch", "• 10 Absperrgitter"]), str(t.evaluate("__three.texts")))
+    check("3D-Ansicht: Infozeile nennt Maschinen und offenen Bedarf", "3 Maschinen" in t.locator("#v3Info").inner_text() and "2 Bedarf offen" in t.locator("#v3Info").inner_text(), t.locator("#v3Info").inner_text())
+    check("3D-Ansicht: Zeichenflaeche im Fenster, kein Ton", t.locator("#v3Box canvas").count() == 1 and t.evaluate("__audio") == 0)
+    check("3D-Ansicht: kein seitliches Scrollen", not t.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
+    check("3D-Ansicht: ohne Stoerung kein Alarmbalken", not t.locator("#v3Alarm").is_visible())
+
+    d0 = t.evaluate("__three.disposed")
+    t.evaluate("machines.find(m => m.id === 1).status = 'broken'; render();"); t.wait_for_timeout(200)
+    check("3D-Ansicht: Stoerung von aussen -> Alarmbalken im Fenster mit Name", t.locator("#v3Alarm").is_visible() and "Bagger 1" in t.locator("#v3Alarm").inner_text(), t.locator("#v3Alarm").inner_text())
+    check("3D-Ansicht: Neuaufbau gibt alte Texturen frei, Modelle bleiben 3", t.evaluate("__three.disposed") > d0 and len(t.evaluate("__three.machines()")) == 3)
+    check("3D-Ansicht: Status steht als Text am Schild (Defekt)", "Defekt" in t.evaluate("__three.texts"))
+    t.evaluate("machines.find(m => m.id === 13).site = 's3'; machines.find(m => m.id === 13).status = 'running'; render();"); t.wait_for_timeout(200)
+    check("3D-Ansicht: Maschine kommt dazu -> 4 Modelle", len(t.evaluate("__three.machines()")) == 4, str(t.evaluate("__three.machines()")))
+    t.evaluate("machines.find(m => m.id === 13).site = null; machines.find(m => m.id === 13).status = 'off'; machines.find(m => m.id === 1).status = 'running'; render();"); t.wait_for_timeout(200)
+    check("3D-Ansicht: Maschine geht -> wieder 3 Modelle, Alarm weg", len(t.evaluate("__three.machines()")) == 3 and not t.locator("#v3Alarm").is_visible())
+    t.evaluate("needs.push({id:'x1', site:'s3', text:'<img src=x onerror=alert(1)> Zement', author:'t', createdBy:'t', createdAt:new Date().toISOString(), done:false, doneBy:''}); render();"); t.wait_for_timeout(200)
+    check("3D-Ansicht: Benutzertext nur auf der Zeichenflaeche, nie als HTML", any("<img src=x onerror=alert(1)>" in x for x in t.evaluate("__three.texts")) and t.locator("#v3d img").count() == 0)
+
+    t.click("#v3Close"); t.wait_for_timeout(200)
+    check("3D-Ansicht schliessen: Fenster zu, Renderer freigegeben, Kontext beendet, Zeichenflaeche entfernt",
+          not t.locator("#v3d").is_visible() and t.evaluate("__three.rendererDisposed") == 1 and t.evaluate("__three.contextLost") == 1 and t.locator("#v3Box canvas").count() == 0)
+    t.click("#open3dBtn"); t.wait_for_timeout(300)
+    check("3D-Ansicht: erneut oeffnen -> zweiter Renderer, 3 Modelle", t.evaluate("__three.renderers.length") == 2 and len(t.evaluate("__three.machines()")) == 3)
+    t.keyboard.press("Escape"); t.wait_for_timeout(200)
+    check("3D-Ansicht: Escape schliesst und gibt frei", not t.locator("#v3d").is_visible() and t.evaluate("__three.rendererDisposed") == 2)
+
+    # Werkhof, viele Maschinen, Moduswechsel, geloeschte Baustelle
+    t.evaluate("selectSite('depot')"); t.wait_for_timeout(200)
+    t.click("#open3dBtn"); t.wait_for_timeout(300)
+    check("3D-Ansicht: Werkhof zeigt seine Maschinen (13, 14, 15)", sorted(t.evaluate("__three.machines()")) == [13, 14, 15] and "Werkhof" in t.locator("#v3Title").inner_text(), str(t.evaluate("__three.machines()")))
+    t.evaluate("sites.push({id:'q', name:'Gross', sparte:'strasse', lat:47.2, lng:8.8}); for(let i=0;i<30;i++) machines.push({id:'g'+i, name:'M'+i, typ:'LKW', sparte:'strasse', site:'q', status:'running', reason:''}); selectSite('q')"); t.wait_for_timeout(200)
+    t.keyboard.press("Escape"); t.click("#open3dBtn"); t.wait_for_timeout(300)
+    check("3D-Ansicht: ab 25 Maschinen werden 24 gezeigt und das steht ehrlich dabei", len(t.evaluate("__three.machines()")) == 24 and "24 davon gezeigt" in t.locator("#v3Info").inner_text() and "30 Maschinen" in t.locator("#v3Info").inner_text(), t.locator("#v3Info").inner_text())
+    t.evaluate("sites = sites.filter(s => s.id !== 'q'); machines = machines.filter(m => m.site !== 'q'); selected = 's3'; render();"); t.wait_for_timeout(200)
+    check("3D-Ansicht: Baustelle verschwindet -> Fenster schliesst von selbst", not t.locator("#v3d").is_visible() and t.evaluate("__three.rendererDisposed") == 4, str(t.evaluate("__three.rendererDisposed")))
+    t.click("#open3dBtn"); t.wait_for_timeout(300)
+    t.evaluate("setMode('leicht', true)"); t.wait_for_timeout(300)
+    check("3D-Ansicht: Wechsel auf Leicht schliesst das Fenster", not t.locator("#v3d").is_visible() and t.evaluate("__three.rendererDisposed") == 5 and t.locator("#open3dBtn").count() == 0)
+
+    # Fehlerfaelle: kein WebGL, three.js nicht ladbar
+    w = raw_page(1280, 800, stubs=True); w.goto(URL + "?modus=3d"); w.wait_for_timeout(700)
+    w.evaluate("window.__noWebGL = true"); w.click("#open3dBtn"); w.wait_for_timeout(300)
+    check("Kein WebGL: Hinweis auf den Modus Leicht, Fenster zu, nichts haengt", not w.locator("#v3d").is_visible() and "Modus Leicht" in w.locator("#toast").inner_text() and w.evaluate("__three.renderers.length") == 0, w.locator("#toast").inner_text())
+    nl = raw_page(1280, 800); nl.goto(URL + "?modus=3d"); nl.wait_for_timeout(700)
+    nl.click("#open3dBtn"); nl.wait_for_timeout(600)
+    check("three.js nicht ladbar: Hinweis, Fenster zu, Seite lebt weiter", not nl.locator("#v3d").is_visible() and "3D konnte nicht geladen werden" in nl.locator("#toast").inner_text() and nl.locator("#detail strong").count() >= 1, nl.locator("#toast").inner_text())
     b.close()
 
 print()

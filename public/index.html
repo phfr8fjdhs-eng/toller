@@ -78,6 +78,13 @@
   .need.done .ntxt{color:var(--muted);text-decoration:line-through}
   .need button{padding:4px 8px;font-size:12px}
   @media(max-width:600px){.need button{padding:9px 12px}}
+  .open3d{width:100%;padding:10px 12px;font-size:14px;margin:4px 0 2px}
+  .overlay.v3{align-items:stretch;justify-content:stretch;overflow:hidden;padding:12px}
+  .v3wrap{display:flex;flex-direction:column;gap:10px;width:100%;min-height:0}
+  #v3Alarm{background:var(--bad);color:#fff;padding:8px 12px;border-radius:8px;font-weight:600;font-size:14px}
+  #v3Box{flex:1;min-height:0;position:relative;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#121a22}
+  #v3Box canvas{display:block;width:100%;height:100%;touch-action:none}
+  #v3Info{font-size:12px}
 
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:16px}
   .panel h2{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
@@ -247,6 +254,14 @@
 </div>
 
 <div id="pickBar" hidden><span>Tippe auf die Karte, um den Ort der Baustelle zu wählen.</span><button id="pickCancel">Abbrechen</button></div>
+<div id="v3d" class="overlay solid v3" role="dialog" aria-modal="true" aria-labelledby="v3Title" hidden>
+  <div class="v3wrap">
+    <div class="cardhead"><h2 id="v3Title">3D-Ansicht</h2><button id="v3Close" class="primary">Schliessen</button></div>
+    <div id="v3Alarm" role="alert" hidden></div>
+    <div id="v3Box"></div>
+    <div id="v3Info" class="muted"></div>
+  </div>
+</div>
 <div id="toast" hidden></div>
 
 <script>
@@ -882,6 +897,13 @@ function renderDetail(){
   if(s.sparte) head.appendChild(el("span", "muted", SPARTEN[s.sparte]));
   box.appendChild(head);
 
+  if(MODE === "3d"){                                           // 3D-Ansicht gibt es nur im Modus 3D (Computer)
+    const b3 = el("button", "open3d", "3D-Ansicht");
+    b3.id = "open3dBtn";
+    b3.onclick = ()=>open3D(s.id);
+    box.appendChild(b3);
+  }
+
   if(s.id !== "depot") renderNeeds(box, s);
 
   box.appendChild(el("div", "sub", "Maschinen"));
@@ -1018,6 +1040,7 @@ function render(){
   renderNeedsAll();
   renderList();
   renderDetail();
+  update3D();
 }
 
 // Automatisches Neuzeichnen wartet, solange ein Finger oder die Maus gedrückt ist.
@@ -1036,6 +1059,394 @@ function selectSite(id){
   }
   render();
 }
+
+/* =============================================================== 3D-Ansicht einer Baustelle (nur Modus 3D)
+   three.js (Version 1:1 festgelegt) wird erst beim Öffnen geladen. Jede Maschine ist aus einfachen Körpern gebaut, die Baustelle
+   hängt von der Sparte und den Maschinen ab. Status: Ring am Boden und Leuchte über der Maschine in den Status-Farben
+   (Defekt blinkt), dazu der Status als Text am Namensschild. Texte aus Benutzereingaben nur per fillText auf Zeichenflächen.
+   Beim Schliessen werden alle Ressourcen freigegeben. */
+const THREE_JS = "https://unpkg.com/three@0.147.0/build/three.min.js";
+const ORBIT_JS = "https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js";
+const STATUS_HEX = { running:0x2ea043, waiting:0xd4a72c, broken:0xf85149, off:0x6e7681 };
+const C3 = { body:0xd5dbe3, dark:0x4a5460, glass:0x8fa3b8, steel:0xaab4bf, wheel:0x2b323b, orange:0xd9895b, light:0xcfd5dc };
+const FOOT = { bagger:3.4, mini:2.6, dumper:3.2, lkw:4.1, walze:3, fertiger:3.2, lader:3.1, tele:3.5, platte:1.3, maeher:1.6, allg:2.4 };
+const TOPH = { bagger:3.4, mini:2.5, dumper:3, lkw:3.4, walze:3.4, fertiger:3.8, lader:3.7, tele:3.4, platte:1.9, maeher:2, allg:3.3 };
+const MAX3D = 24, PER_ROW = 4, GAP_X = 10.5, GAP_Z = 9, ROW0 = 6;
+let v3 = null, open3dToken = 0, v3Opener = null;
+
+async function loadThree(){
+  if(window.THREE && window.THREE.OrbitControls) return true;
+  if(!window.THREE && !(await loadScript(THREE_JS))) return false;
+  if(!(window.THREE && window.THREE.OrbitControls) && !(await loadScript(ORBIT_JS))) return false;
+  return !!(window.THREE && window.THREE.OrbitControls);
+}
+
+// gecachte Körper und Materialien (leben, solange die Ansicht offen ist)
+function g3(kind, a){
+  const key = kind + ":" + a.join(",");
+  return v3.geos[key] || (v3.geos[key] = new THREE[kind + "Geometry"](...a));
+}
+function m3(hex){ return v3.mats[hex] || (v3.mats[hex] = new THREE.MeshLambertMaterial({ color:hex })); }
+function mb3(hex, opacity){
+  const key = "b" + hex + "_" + (opacity || 1);
+  return v3.mats[key] || (v3.mats[key] = new THREE.MeshBasicMaterial(opacity ? { color:hex, transparent:true, opacity, depthWrite:false } : { color:hex }));
+}
+function own(x){ v3.own.push(x); return x; }          // nur für den aktuellen Inhalt, wird beim Neuaufbau freigegeben
+function part(p, kind, a, mat, x, y, z, rx, ry, rz){
+  const m = new THREE.Mesh(g3(kind, a), mat);
+  m.position.set(x || 0, y || 0, z || 0);
+  if(rx || ry || rz) m.rotation.set(rx || 0, ry || 0, rz || 0);
+  p.add(m);
+  return m;
+}
+const bx = (p, w, h, d, c, x, y, z, rx, ry, rz) => part(p, "Box", [w, h, d], m3(c), x, y, z, rx, ry, rz);
+const cy = (p, rt, rb, h, c, x, y, z, rx, ry, rz) => part(p, "Cylinder", [rt, rb, h, 16], m3(c), x, y, z, rx, ry, rz);
+const sp = (p, r, c, x, y, z) => part(p, "Sphere", [r, 14, 10], m3(c), x, y, z);
+const flat = (p, w, d, c, x, y, z) => part(p, "Plane", [w, d], m3(c), x, y, z, -Math.PI / 2, 0, 0);
+const wheel3 = (p, r, w, x, y, z)=>{ cy(p, r, r, w, C3.wheel, x, y, z, Math.PI / 2, 0, 0); cy(p, r * 0.5, r * 0.5, w + 0.04, C3.steel, x, y, z, Math.PI / 2, 0, 0); };
+const grp = (p, x, y, z, rz)=>{ const g = new THREE.Group(); g.position.set(x, y, z); if(rz) g.rotation.set(0, 0, rz); p.add(g); return g; };
+
+// Maschinen: Blick nach +x, Boden bei y = 0, Masse ungefähr in Metern
+const MODELS3 = {
+  bagger(g){
+    const B = C3.body, D = C3.dark;
+    bx(g, 4.6, 0.8, 1.0, C3.wheel, 0, 0.4, -1.1); bx(g, 4.6, 0.8, 1.0, C3.wheel, 0, 0.4, 1.1);
+    bx(g, 3.2, 0.4, 2.2, D, 0, 0.95, 0);
+    const up = grp(g, 0, 1.15, 0);
+    bx(up, 3.0, 1.2, 2.4, B, -0.3, 0.6, 0); bx(up, 1.0, 0.6, 2.3, D, -1.9, 0.5, 0);
+    bx(up, 1.3, 1.3, 1.2, B, 0.9, 1.45, 0.55); bx(up, 0.06, 0.8, 1.0, C3.glass, 1.56, 1.6, 0.55);
+    const boom = grp(up, 1.3, 0.9, -0.4, 0.4);  bx(boom, 3.2, 0.45, 0.45, B, 1.6, 0, 0);
+    const stick = grp(boom, 3.2, 0, 0, -1.3);   bx(stick, 2.2, 0.35, 0.35, B, 1.1, 0, 0);
+    const bucket = grp(stick, 2.2, 0, 0, -0.7); bx(bucket, 0.9, 0.7, 1.0, D, 0.3, -0.2, 0);
+  },
+  dumper(g){
+    bx(g, 6, 0.5, 2.2, C3.dark, 0, 1.0, 0);
+    bx(g, 3.8, 1.3, 2.8, C3.body, -0.9, 2.0, 0, 0, 0, 0.06);
+    bx(g, 1.6, 1.6, 2.0, C3.body, 2.0, 2.0, 0); bx(g, 0.06, 0.7, 1.6, C3.glass, 2.83, 2.3, 0);
+    [-1.8, 1.9].forEach(x => { wheel3(g, 0.9, 0.8, x, 0.9, -1.35); wheel3(g, 0.9, 0.8, x, 0.9, 1.35); });
+  },
+  lkw(g){
+    bx(g, 7.5, 0.4, 2.3, C3.dark, 0, 1.0, 0);
+    bx(g, 2, 2.2, 2.3, C3.body, 3.0, 2.3, 0); bx(g, 0.06, 0.9, 1.9, C3.glass, 4.03, 2.7, 0);
+    bx(g, 5, 1.6, 2.4, C3.body, -1.0, 2.0, 0);
+    [3.0, -1.2, -2.6].forEach(x => { wheel3(g, 0.55, 0.5, x, 0.55, -1.2); wheel3(g, 0.55, 0.5, x, 0.55, 1.2); });
+  },
+  walze(g){
+    cy(g, 0.95, 0.95, 2.0, C3.steel, 2.2, 0.95, 0, Math.PI / 2, 0, 0);
+    bx(g, 4.8, 0.7, 1.6, C3.dark, 0.2, 1.6, 0); bx(g, 2.4, 1.0, 2.0, C3.body, -1.2, 2.4, 0);
+    bx(g, 1.4, 1.5, 1.5, C3.body, 0.7, 2.6, 0); bx(g, 0.06, 0.8, 1.2, C3.glass, 1.43, 2.7, 0);
+    wheel3(g, 0.9, 0.8, -1.8, 0.9, -1.0); wheel3(g, 0.9, 0.8, -1.8, 0.9, 1.0);
+  },
+  fertiger(g){
+    bx(g, 5, 0.8, 0.8, C3.wheel, 0, 0.4, -1.15); bx(g, 5, 0.8, 0.8, C3.wheel, 0, 0.4, 1.15);
+    bx(g, 4.8, 1.4, 3.0, C3.body, 0.3, 1.5, 0);
+    bx(g, 1.2, 0.9, 3.8, C3.dark, 2.9, 1.8, 0, 0, 0, -0.25);
+    bx(g, 0.9, 0.5, 4.0, C3.steel, -3.1, 0.5, 0);
+    bx(g, 3, 0.12, 2.6, C3.body, 0.3, 3.6, 0);
+    [-1, 1].forEach(a => [-1, 1].forEach(b => cy(g, 0.06, 0.06, 1.9, C3.dark, 0.3 + a * 1.3, 2.65, b * 1.2)));
+  },
+  lader(g){
+    bx(g, 2.4, 1.2, 2.2, C3.body, -1.0, 1.6, 0); bx(g, 2.0, 0.9, 2.0, C3.dark, 1.0, 1.1, 0);
+    bx(g, 1.6, 1.5, 1.8, C3.body, -1.0, 2.9, 0); bx(g, 0.06, 0.8, 1.4, C3.glass, -0.17, 3.0, 0);
+    bx(g, 2.2, 0.3, 0.3, C3.body, 2.2, 1.9, -0.8, 0, 0, 0.25); bx(g, 2.2, 0.3, 0.3, C3.body, 2.2, 1.9, 0.8, 0, 0, 0.25);
+    bx(g, 1.0, 0.9, 2.8, C3.dark, 3.5, 1.1, 0, 0, 0, -0.15);
+    [-1.4, 1.6].forEach(x => { wheel3(g, 0.9, 0.8, x, 0.9, -1.2); wheel3(g, 0.9, 0.8, x, 0.9, 1.2); });
+  },
+  tele(g){
+    bx(g, 5.5, 1.2, 2.0, C3.body, 0, 1.5, 0); bx(g, 1.5, 1.5, 1.0, C3.body, 0.6, 2.8, 0.55); bx(g, 0.06, 0.8, 0.8, C3.glass, 1.36, 2.9, 0.55);
+    const boom = grp(g, -1.8, 2.2, 0, 0.35);
+    bx(boom, 6.0, 0.5, 0.5, C3.body, 3.0, 0, 0); bx(boom, 2.5, 0.35, 0.35, C3.steel, 7.0, 0, 0); bx(boom, 0.2, 1.2, 2.0, C3.dark, 8.3, -0.4, 0);
+    [-1.8, 1.8].forEach(x => { wheel3(g, 0.85, 0.7, x, 0.85, -1.2); wheel3(g, 0.85, 0.7, x, 0.85, 1.2); });
+  },
+  platte(g){
+    bx(g, 1.6, 0.25, 1.2, C3.dark, 0, 0.15, 0); bx(g, 0.9, 0.8, 0.8, C3.body, -0.2, 0.7, 0);
+    bx(g, 1.8, 0.06, 0.06, C3.dark, -1.1, 1.0, 0, 0, 0, 0.5); bx(g, 0.06, 0.06, 0.8, C3.dark, -1.9, 1.45, 0);
+  },
+  maeher(g){
+    bx(g, 2.2, 0.35, 1.8, C3.dark, 0.4, 0.5, 0); bx(g, 1.8, 0.8, 1.0, C3.body, -0.4, 1.0, 0);
+    bx(g, 0.7, 0.7, 0.8, C3.dark, -0.7, 1.7, 0); bx(g, 0.1, 0.7, 0.1, C3.dark, 0.4, 1.6, 0); bx(g, 0.1, 0.1, 0.7, C3.dark, 0.4, 1.95, 0);
+    wheel3(g, 0.5, 0.4, -1.0, 0.5, -0.95); wheel3(g, 0.5, 0.4, -1.0, 0.5, 0.95);
+    wheel3(g, 0.3, 0.3, 1.5, 0.3, -0.85); wheel3(g, 0.3, 0.3, 1.5, 0.3, 0.85);
+  },
+  allg(g){
+    bx(g, 4, 1.4, 2, C3.body, 0, 1.2, 0); bx(g, 1.6, 1.2, 1.6, C3.body, -0.6, 2.5, 0); bx(g, 0.06, 0.7, 1.2, C3.glass, 0.21, 2.6, 0);
+    [-1.3, 1.3].forEach(x => { wheel3(g, 0.7, 0.6, x, 0.7, -1.1); wheel3(g, 0.7, 0.6, x, 0.7, 1.1); });
+  }
+};
+
+function wrapText(ctx, text, maxW, maxLines){
+  const words = String(text).split(/\s+/), lines = [];
+  let cur = "";
+  words.forEach(w=>{
+    // sehr lange Wörter hart kürzen
+    while(ctx.measureText(w).width > maxW && w.length > 1) w = w.slice(0, -1);
+    const t = cur ? cur + " " + w : w;
+    if(ctx.measureText(t).width <= maxW) cur = t; else { lines.push(cur); cur = w; }
+  });
+  if(cur) lines.push(cur);
+  if(lines.length > maxLines){ lines.length = maxLines; lines[maxLines - 1] += " …"; }
+  return lines;
+}
+function canvas3(w, h){ const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
+function hexCss(h){ return "#" + ("000000" + h.toString(16)).slice(-6); }
+
+function nameSprite(m){
+  const c = canvas3(320, 84), x = c.getContext("2d");
+  x.fillStyle = "rgba(15,20,25,.88)"; x.fillRect(0, 0, 320, 84);
+  x.fillStyle = hexCss(STATUS_HEX[m.status] || STATUS_HEX.off); x.fillRect(0, 0, 14, 84);
+  x.fillStyle = "#e6edf3"; x.font = "bold 30px system-ui, sans-serif"; x.textBaseline = "alphabetic";
+  let nm = m.name; while(x.measureText(nm).width > 280 && nm.length > 1) nm = nm.slice(0, -1);
+  x.fillText(nm, 28, 36);
+  x.fillStyle = "#c3ccd6"; x.font = "24px system-ui, sans-serif";
+  let st = m.status === "waiting" && m.reason ? m.reason : (LABEL[m.status] || m.status);
+  while(x.measureText(st).width > 280 && st.length > 1) st = st.slice(0, -1);
+  x.fillText(st, 28, 68);
+  const tex = own(new THREE.CanvasTexture(c));
+  const sm = own(new THREE.SpriteMaterial({ map:tex, transparent:true, depthWrite:false }));
+  const s = new THREE.Sprite(sm);
+  s.scale.set(5, 5 * 84 / 320, 1);
+  return s;
+}
+
+function needBoard(list, extra){
+  const c = canvas3(512, 384), x = c.getContext("2d");
+  x.fillStyle = "#e6edf3"; x.fillRect(0, 0, 512, 384);
+  x.fillStyle = "#1a222c"; x.fillRect(0, 0, 512, 56);
+  x.fillStyle = "#e6edf3"; x.font = "bold 34px system-ui, sans-serif"; x.fillText("Bedarf", 18, 40);
+  x.fillStyle = "#1a222c"; x.font = "26px system-ui, sans-serif";
+  let y = 92;
+  for(const n of list){
+    const lines = wrapText(x, n.text, 450, 2);
+    if(y + lines.length * 30 > 372) break;
+    lines.forEach((t, i)=>{ x.fillText((i === 0 ? "• " : "   ") + t, 18, y); y += 30; });
+    y += 8;
+  }
+  if(extra > 0){ x.fillStyle = "#4a5460"; x.fillText("… und " + extra + " weitere", 18, Math.min(y, 370)); }
+  const tex = own(new THREE.CanvasTexture(c));
+  const mat = own(new THREE.MeshBasicMaterial({ map:tex }));
+  return new THREE.Mesh(g3("Plane", [6, 4.5]), mat);
+}
+
+function fence3(p, x1, z1, x2, z2){
+  const len = Math.hypot(x2 - x1, z2 - z1), ang = -Math.atan2(z2 - z1, x2 - x1);
+  const cx = (x1 + x2) / 2, cz = (z1 + z2) / 2;
+  bx(p, len, 0.08, 0.08, C3.light, cx, 1.55, cz, 0, ang, 0); bx(p, len, 0.08, 0.08, C3.light, cx, 0.7, cz, 0, ang, 0);
+  const n = Math.max(1, Math.round(len / 4));
+  for(let i = 0; i <= n; i++) bx(p, 0.14, 1.8, 0.14, C3.steel, x1 + (x2 - x1) * i / n, 0.9, z1 + (z2 - z1) * i / n);
+}
+function tree3(p, x, z, h){
+  cy(p, 0.3, 0.35, h, 0x6b4f35, x, h / 2, z); sp(p, 1.8, 0x3f7a45, x, h + 1.1, z);
+}
+
+// Boden und Ausstattung je nach Sparte und vorhandenen Maschinen
+function ground3(p, site, kinds, zFront){
+  const zMin = -22, zMax = zFront + 6, isDepot = site.id === "depot";
+  const kind = isDepot ? "hof" : site.sparte;
+  const base = { strasse:0x4b5148, garten:0x2f4a33, hof:0x394049, tief:0x4a3d31 }[kind] || 0x4a3d31;
+  if(kind === "tief"){
+    const sh = new THREE.Shape();                                    // Boden mit Loch für den Graben (Form liegt in x/y, wird gekippt)
+    sh.moveTo(-32, -zMax); sh.lineTo(32, -zMax); sh.lineTo(32, -zMin); sh.lineTo(-32, -zMin); sh.lineTo(-32, -zMax);
+    const hole = new THREE.Path();
+    hole.moveTo(-20, 7); hole.lineTo(8, 7); hole.lineTo(8, 12); hole.lineTo(-20, 12); hole.lineTo(-20, 7);
+    sh.holes.push(hole);
+    const gm = own(new THREE.ShapeGeometry(sh));
+    const ground = new THREE.Mesh(gm, m3(base)); ground.rotation.set(-Math.PI / 2, 0, 0); p.add(ground);
+    flat(p, 28, 5, 0x1c1510, -6, -1.4, -9.5);
+    bx(p, 28, 1.4, 0.12, 0x3a2e24, -6, -0.7, -12); bx(p, 28, 1.4, 0.12, 0x3a2e24, -6, -0.7, -7);
+    bx(p, 0.12, 1.4, 5, 0x3a2e24, -20, -0.7, -9.5); bx(p, 0.12, 1.4, 5, 0x3a2e24, 8, -0.7, -9.5);
+    [-16, -11, -6].forEach(x => cy(p, 0.45, 0.45, 4, 0x8e98a3, x, 0.45, -4.5, 0, 0, Math.PI / 2));   // Rohre bereit zum Einlegen
+    cy(p, 0.45, 0.45, 4, 0x8e98a3, -14, -0.9, -9.5, 0, 0, Math.PI / 2);
+    cy(p, 0, 2.6, 2, 0x6b5642, -3, 1, -14.5, 0, 0, 0);                                                // Aushub
+    if(kinds.has("bagger") || kinds.has("mini")) cy(p, 0, 3.2, 2.6, 0x6b5642, 12, 1.3, -9, 0, 0, 0);
+  } else {
+    flat(p, 64, zMax - zMin, base, 0, 0, (zMax + zMin) / 2);
+  }
+  if(kind === "strasse"){
+    flat(p, 64, 9, 0x2c3036, 0, 0.02, -7.5);
+    bx(p, 64, 0.06, 0.3, 0xaeb5bd, 0, 0.05, -12); bx(p, 64, 0.06, 0.3, 0xaeb5bd, 0, 0.05, -3);
+    for(let x = -28; x <= 28; x += 4) bx(p, 2, 0.04, 0.25, C3.light, x, 0.06, -7.5);
+    if(kinds.has("walze") || kinds.has("fertiger")) flat(p, 24, 6, 0x1a1d21, -6, 0.04, -7.5);          // frischer Belag
+    [10, 12.5, 15].forEach(x => { cy(p, 0.05, 0.4, 0.9, C3.orange, x, 0.45, -1.5); bx(p, 0.9, 0.08, 0.9, C3.light, x, 0.04, -1.5); });
+  } else if(kind === "garten"){
+    if(kinds.has("maeher")) for(let i = 0; i < 8; i++) flat(p, 3, 12, 0x3a5a3e, -21 + i * 6, 0.02, -8);       // Mähstreifen
+    bx(p, 64, 0.05, 2, 0x7b6f5f, 0, 0.03, -0.5);
+    bx(p, 8, 0.25, 5, 0x5a4636, 12, 0.12, -8);
+    for(let i = 0; i < 3; i++) for(let j = 0; j < 4; j++) sp(p, 0.35, 0x5f9d5b, 9 + j * 2, 0.5, -9.5 + i * 1.6);
+    tree3(p, -22, -13, 2.2); tree3(p, -16, -15, 2.6); tree3(p, 20, -14, 2.4); tree3(p, 25, -2, 2);
+  } else if(kind === "hof"){
+    bx(p, 18, 5, 10, 0x4a525c, -12, 2.5, -10); bx(p, 18.4, 0.3, 10.4, 0x2c3138, -12, 5.1, -10); bx(p, 5, 3.5, 0.1, 0x20252b, -12, 1.75, -4.95);
+    for(let x = -28; x <= 28; x += 7) bx(p, 0.15, 0.04, 6, 0xc9ced6, x, 0.04, zFront - 1);
+  }
+  const back = -16;
+  fence3(p, -24, back, 24, back); fence3(p, -24, back, -24, zFront); fence3(p, 24, back, 24, zFront);
+}
+
+function buildContent3D(site){
+  const root = v3.content;
+  const list = machines.filter(m => loc(m) === site.id);
+  const shown = list.slice(0, MAX3D);
+  const rows = Math.max(1, Math.ceil(shown.length / PER_ROW));
+  const zFront = ROW0 + (rows - 1) * GAP_Z + 6;
+  const kinds = new Set(list.map(m => machKind(m.typ)));
+  ground3(root, site, kinds, zFront);
+
+  const open = site.id === "depot" ? [] : openNeeds(site.id);
+  if(open.length && (!LIVE || needsOk)){                                              // Bedarfstafel: die offenen Texte
+    const bx0 = 20.5, bz = -1.5;
+    bx(root, 0.2, 2.6, 0.2, C3.steel, bx0 - 2.4, 1.3, bz - 0.2); bx(root, 0.2, 2.6, 0.2, C3.steel, bx0 + 2.4, 1.3, bz - 0.2);
+    bx(root, 6.3, 4.8, 0.12, C3.dark, bx0, 4.4, bz - 0.12);
+    const board = needBoard(open.slice(0, 6), Math.max(0, open.length - 6));
+    board.position.set(bx0, 4.4, bz - 0.04); root.add(board);
+  }
+
+  v3.blinkers = [];
+  shown.forEach((m, i)=>{
+    const kind = machKind(m.typ), row = Math.floor(i / PER_ROW), inRow = Math.min(PER_ROW, shown.length - row * PER_ROW), col = i % PER_ROW;
+    const w = new THREE.Group();
+    w.userData.machine = m.id;
+    w.position.set((col - (inRow - 1) / 2) * GAP_X, 0, ROW0 + row * GAP_Z);
+    w.rotation.set(0, ((i % 3) - 1) * 0.25, 0);
+    const body = new THREE.Group();
+    (MODELS3[kind] || MODELS3.allg)(body);
+    const k = kind === "mini" ? 0.7 : 1;
+    if(k !== 1) body.scale.set(k, k, k);
+    w.add(body);
+    const R = FOOT[kind] || 2.4, top = (TOPH[kind] || 3.3) * k;
+    const blob = part(w, "Circle", [R * 0.85, 24], mb3(0x000000, 0.28), 0, 0.03, 0, -Math.PI / 2, 0, 0);
+    const ring = part(w, "Ring", [R, R + 0.3, 40], mb3(STATUS_HEX[m.status] || STATUS_HEX.off), 0, 0.06, 0, -Math.PI / 2, 0, 0);
+    const lamp = part(w, "Sphere", [0.32, 12, 8], mb3(STATUS_HEX[m.status] || STATUS_HEX.off), 0, top + 0.5, 0);
+    if(m.status === "broken"){ v3.blinkers.push(ring, lamp); }
+    const lab = nameSprite(m); lab.position.set(0, top + 1.9, 0); w.add(lab);
+    root.add(w);
+  });
+  if(!shown.length){                                                                   // keine Maschine: Absperrung
+    bx(root, 9, 0.5, 0.15, C3.light, 0, 1.1, 5); bx(root, 0.2, 1.1, 0.2, C3.steel, -4, 0.55, 5); bx(root, 0.2, 1.1, 0.2, C3.steel, 4, 0.55, 5);
+  }
+  return { rows, zFront, shown: shown.length, total: list.length, open: open.length };
+}
+
+function sig3(site){
+  return [site.id, site.name, site.sparte,
+    machines.filter(m => loc(m) === site.id).map(m => [m.id, m.name, m.typ, m.status, m.reason].join("|")).join(";"),
+    site.id === "depot" ? "" : openNeeds(site.id).map(n => n.id + ":" + n.text).join(";"), needsOk].join("#");
+}
+
+function fill3D(site){
+  const v = v3;
+  v.own.forEach(o => { try{ o.dispose(); }catch(e){} });
+  v.own = [];
+  v.scene.remove(v.content);
+  v.content = new THREE.Group();
+  v.scene.add(v.content);
+  const r = buildContent3D(site);
+  v.blinkers.forEach(o => { o.visible = v.lastOn; });
+  v.sig = sig3(site);
+  v.dirty = true;
+  $("v3Title").textContent = site.name + (site.sparte ? " · " + SPARTEN[site.sparte] : "");
+  $("v3Info").textContent = (r.total === 1 ? "1 Maschine" : r.total + " Maschinen") + (r.total > r.shown ? " (" + r.shown + " davon gezeigt)" : "")
+    + (r.open ? " · " + r.open + " Bedarf offen" : "") + ". Ziehen: drehen · Mausrad oder zwei Finger: zoomen · Rechte Maustaste: verschieben";
+  return r;
+}
+
+function loop3D(t){
+  const v = v3;
+  if(!v) return;
+  v.raf = requestAnimationFrame(loop3D);
+  if(document.hidden) return;
+  const on = v.still || Math.floor(t / 450) % 2 === 0;
+  if(on !== v.lastOn){ v.blinkers.forEach(o => { o.visible = on; }); v.lastOn = on; v.dirty = true; }
+  const moved = v.controls.update();
+  if(moved || v.dirty){ v.renderer.render(v.scene, v.camera); v.dirty = false; }
+}
+
+async function open3D(id){
+  if(MODE !== "3d") return;
+  const site = findSite(id);
+  if(!site) return;
+  close3D();
+  const token = ++open3dToken;
+  v3Opener = document.activeElement;
+  const box = $("v3Box");
+  $("v3d").hidden = false;
+  $("v3Title").textContent = site.name;
+  $("v3Info").textContent = "3D wird geladen …";
+  $("v3Alarm").hidden = true;
+  $("v3Close").focus();
+  const ok = await loadThree();
+  if(token !== open3dToken) return;                                // inzwischen geschlossen oder anderes geöffnet
+  if(!ok){ close3D(); toast("3D konnte nicht geladen werden (kein Internet?). Der Modus Leicht funktioniert auch ohne.", true); return; }
+
+  let renderer;
+  try{ renderer = new THREE.WebGLRenderer({ antialias:true }); }
+  catch(e){ close3D(); toast("Dieses Gerät kann kein 3D darstellen. Bitte den Modus Leicht verwenden.", true); return; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setClearColor(0x121a22);
+  box.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 0.95));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(20, 40, 25); scene.add(sun);
+  const camera = new THREE.PerspectiveCamera(45, 1.6, 0.5, 400);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.maxPolarAngle = Math.PI / 2 - 0.05; controls.minDistance = 6; controls.maxDistance = 90;
+
+  const v = v3 = { siteId:id, renderer, scene, camera, controls, canvas:renderer.domElement, geos:{}, mats:{}, own:[], content:new THREE.Group(),
+    blinkers:[], sig:"", dirty:true, raf:0, lastOn:true,
+    still: !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) };
+  scene.add(v.content);
+  const r = fill3D(site);
+  const zc = (-16 + r.zFront) / 2;
+  controls.target.set(0, 0.5, zc);
+  camera.position.set(0, 26 + r.rows * 4, r.zFront + 22 + r.rows * 3);
+  camera.lookAt(0, 0.5, zc);
+
+  v.onResize = ()=>{
+    const w = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
+    renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); v.dirty = true;
+  };
+  v.onLost = e=>{ e.preventDefault(); close3D(); toast("3D wurde vom Gerät beendet (zu wenig Grafikspeicher). Bitte den Modus Leicht verwenden.", true); };
+  v.canvas.addEventListener("webglcontextlost", v.onLost);
+  window.addEventListener("resize", v.onResize);
+  if(typeof ResizeObserver !== "undefined"){ v.ro = new ResizeObserver(v.onResize); v.ro.observe(box); }
+  v.onResize();
+  update3D();
+  v.raf = requestAnimationFrame(loop3D);
+}
+
+function close3D(){
+  open3dToken++;
+  const v = v3;
+  v3 = null;
+  $("v3d").hidden = true;
+  if(!v) return;
+  cancelAnimationFrame(v.raf);
+  if(v.ro) v.ro.disconnect();
+  window.removeEventListener("resize", v.onResize);
+  v.canvas.removeEventListener("webglcontextlost", v.onLost);
+  const kill = o => { try{ o.dispose(); }catch(e){} };
+  kill(v.controls);
+  v.own.forEach(kill);
+  Object.keys(v.geos).forEach(k => kill(v.geos[k]));
+  Object.keys(v.mats).forEach(k => kill(v.mats[k]));
+  try{ v.renderer.dispose(); v.renderer.forceContextLoss(); }catch(e){}
+  v.canvas.remove();
+  if(v3Opener && v3Opener.isConnected){ try{ v3Opener.focus(); }catch(e){} }
+  v3Opener = null;
+}
+
+// Aus render() aufgerufen: Inhalt neu aufbauen, wenn sich Maschinen, Status oder Bedarf geändert haben
+function update3D(){
+  if(!v3) return;
+  const site = findSite(v3.siteId);
+  if(!site){ close3D(); toast("Diese Baustelle gibt es nicht mehr."); return; }
+  if(sig3(site) !== v3.sig) fill3D(site);
+  const ban = $("banner");
+  const alarm = $("v3Alarm");
+  alarm.hidden = !ban.classList.contains("show");                   // Störungen auch in der 3D-Ansicht als Banner
+  if(!alarm.hidden) alarm.textContent = ban.textContent;
+}
+$("v3Close").onclick = close3D;
+document.addEventListener("keydown", e=>{ if(e.key === "Escape" && v3) close3D(); });
 
 /* =============================================================== Karte (MapLibre + OpenFreeMap) */
 // Bewusst schlank für Handys: heller Minimal-Stil, keine 3D-Gebäude, Gelände nur als sanftes Relief.

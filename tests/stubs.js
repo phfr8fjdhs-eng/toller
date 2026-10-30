@@ -4,6 +4,37 @@
   window.__audio = 0;
   window.AudioContext = window.webkitAudioContext = function(){ window.__audio++; };
 
+  // ---- three.js: Ersatz, der nur zaehlt (echtes WebGL wird hier NICHT geprueft, siehe CLAUDE.md)
+  const T = window.__three = { renderers:[], rendered:0, disposed:0, contextLost:0, rendererDisposed:0, lastScene:null, texts:[], loads:0, meshes:0 };
+  const vec = () => ({ x:0, y:0, z:0, set(x, y, z){ this.x = x; this.y = y; this.z = z; return this; } });
+  class Obj {
+    constructor(){ this.children = []; this.parent = null; this.userData = {}; this.position = vec(); this.rotation = vec(); this.scale = vec(); this.visible = true; this.holes = []; this.target = vec(); }
+    add(...c){ c.forEach(x => { x.parent = this; this.children.push(x); }); return this; }
+    remove(c){ this.children = this.children.filter(x => x !== c); }
+    traverse(f){ f(this); this.children.forEach(c => c.traverse(f)); }
+    dispose(){ T.disposed++; this.isDisposed = true; }
+    moveTo(){ return this; } lineTo(){ return this; } lookAt(){} updateProjectionMatrix(){} addEventListener(){}
+  }
+  const special = {
+    Mesh: class extends Obj { constructor(g, m){ super(); this.geometry = g; this.material = m; T.meshes++; } },
+    WebGLRenderer: class extends Obj {
+      constructor(){ super(); if(window.__noWebGL) throw new Error("WebGL nicht verfuegbar"); this.domElement = document.createElement("canvas"); T.renderers.push(this); }
+      setPixelRatio(){} setSize(){} setClearColor(){}
+      render(scene){ T.rendered++; T.lastScene = scene; }
+      dispose(){ T.rendererDisposed++; }
+      forceContextLoss(){ T.contextLost++; }
+    },
+    OrbitControls: class extends Obj { update(){ return false; } }
+  };
+  window.THREE = new Proxy({}, { get(t, k){
+    if(typeof k !== "string") return undefined;
+    return special[k] || t[k] || (t[k] = class extends Obj {});
+  } });
+  // Texte, die auf Zeichenflaechen geschrieben werden (Namensschilder, Bedarfstafel)
+  const ft = CanvasRenderingContext2D.prototype.fillText;
+  CanvasRenderingContext2D.prototype.fillText = function(t){ T.texts.push(String(t)); return ft.apply(this, arguments); };
+  T.machines = () => { const out = []; if(T.lastScene) T.lastScene.traverse(o => { if(o.userData && o.userData.machine !== undefined) out.push(o.userData.machine); }); return out; };
+
   // ---- MapLibre
   const handlers = {};
   window.__mapHandlers = handlers;
