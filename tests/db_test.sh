@@ -186,6 +186,14 @@ out=$($PA -c "insert into public.machines(name,sparte,status) values ('Ohne Tank
 expect "Update: Maschine ohne Tank-Spalte anlegen geht weiter" "Ohne Tank" "$out"
 out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
 expect_not "Update: nochmals ausführen ist harmlos" "ERROR" "$out"
+# Optionales Aufräumen aus SUPABASE-ANLEITUNG.md (alte, nicht mehr genutzte Spalten entfernen)
+out=$($PA -v ON_ERROR_STOP=1 -c "alter table public.sites drop column if exists material_name, drop column if exists material_level; alter table public.machines drop column if exists tank;" 2>&1 | grep -i "error" || true)
+expect_not "Aufräumen: alte Spalten lassen sich wie in der Anleitung entfernen" "ERROR" "$out"
+expect_eq "Aufräumen: die alten Spalten sind weg" "0" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and column_name in ('material_name','material_level','tank')")"
+out=$($PA -c "insert into public.machines(name,sparte,status) values ('Nach dem Aufräumen','tief','off') returning name;" 2>&1)
+expect "Aufräumen: Maschine anlegen geht danach weiter" "Nach dem Aufräumen" "$out"
+out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
+expect_not "Aufräumen: schema.sql läuft danach weiterhin ohne Fehler" "ERROR" "$out"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "Bedarf- und Update-Tests: alle bestanden"; else echo "Bedarf- und Update-Tests: $FAILS FEHLER"; exit 1; fi

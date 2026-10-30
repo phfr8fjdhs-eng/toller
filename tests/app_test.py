@@ -390,8 +390,11 @@ with sync_playwright() as p:
           not t.locator("#v3d").is_visible() and t.evaluate("__three.rendererDisposed") == 1 and t.evaluate("__three.contextLost") == 1 and t.locator("#v3Box canvas").count() == 0)
     t.click("#open3dBtn"); t.wait_for_timeout(300)
     check("3D-Ansicht: erneut oeffnen -> zweiter Renderer, 3 Modelle", t.evaluate("__three.renderers.length") == 2 and len(t.evaluate("__three.machines()")) == 3)
-    t.keyboard.press("Escape"); t.wait_for_timeout(200)
+    t.keyboard.press("Escape")
+    focus_id = t.evaluate("document.activeElement && document.activeElement.id")        # sofort lesen: das Neuzeichnen der Demo kann den Fokus spaeter wieder nehmen (gilt fuer alle Knoepfe)
+    t.wait_for_timeout(200)
     check("3D-Ansicht: Escape schliesst und gibt frei", not t.locator("#v3d").is_visible() and t.evaluate("__three.rendererDisposed") == 2)
+    check("3D-Ansicht: Fokus geht beim Schliessen zurueck auf den Knopf 3D-Ansicht", focus_id == "open3dBtn", str(focus_id))
 
     # Werkhof, viele Maschinen, Moduswechsel, geloeschte Baustelle
     t.evaluate("selectSite('depot')"); t.wait_for_timeout(200)

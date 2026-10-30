@@ -114,7 +114,7 @@ Wichtig: Prüfe vor der Wahl die Preise und Nutzungsbedingungen. Manche Gratis-S
 - **Gleichzeitige Änderungen:** Wenn zwei Personen dieselbe Maschine ändern, gilt der letzte Stand. Das sollte vorher festgelegt werden.
 
 ## Echte Karte
-- Die Seite zeigt eine schlanke 3D-Karte mit MapLibre. Den Kartenstil liefert OpenFreeMap (ohne Schlüssel), die Höhendaten kommen von AWS Terrain Tiles. Dafür braucht sie Internet, sonst erscheint die Skizze.
+- Die Seite zeigt eine schlanke 3D-Karte mit MapLibre. Den Kartenstil liefert OpenFreeMap (ohne Schlüssel), die Höhendaten kommen von AWS Terrain Tiles. Dafür braucht sie Internet, sonst erscheint die Skizze. Im Modus Leicht (für ältere Handys) gibt es keine Karte, nur die Skizze, und three.js und MapLibre werden gar nicht erst geladen.
 - Die Karte ist absichtlich einfach gehalten (kein 3D-Gebäude-Modell), damit sie auf Handys flüssig läuft. Mit dem Knopf "3D" schaltest du auf eine flache Ansicht.
 - Prüfe vor dem Firmenbetrieb die Nutzungsbedingungen von OpenFreeMap (openfreemap.org/tos). Alternativen sind swisstopo (für die Schweiz) oder ein bezahlter Kartenanbieter.
 - Baustellen legst du in der Seite an (Adresssuche, Kartenklick oder Koordinaten). Die Positionen stehen in der Datenbank (`lat`, `lng`).

@@ -1,20 +1,23 @@
 # Baustellen-Dashboard
 
 Ein Dashboard für eine Firma mit Gartenbau, Strassenbau und Tiefbau. Eine Karte von oben zeigt die Baustellen
-mit ihren Maschinen. Jede Maschine hat einen Status, bei Störung gibt es Alarm.
+mit ihren Maschinen. Jede Maschine hat einen Status, bei Störung gibt es Alarm. Auf jeder Baustelle steht frei geschrieben, was gebraucht wird (Bedarf).
 Ohne Einrichtung läuft die Seite im **Demo-Modus** mit erfundenen Daten. Mit Supabase (siehe `SUPABASE-ANLEITUNG.md`) läuft sie im **Live-Modus**: Anmeldung, Freigabe durch einen Admin, gemeinsame Daten und Echtzeit auf allen Handys.
 
 ## Ausprobieren
-Öffne `public/index.html` im Browser. Mit Internet erscheint eine **schlanke 3D-Karte von Rapperswil-Jona und Umgebung** (MapLibre, OpenFreeMap), ohne Internet eine Skizze.
-Mit den Knöpfen links oben schaltest du 3D ein und aus oder gehst zurück zur Übersicht. Zwei Finger drehen und kippen die Karte.
+Öffne `public/index.html` im Browser. Mit Internet erscheint im Modus 3D eine **schlanke 3D-Karte von Rapperswil-Jona und Umgebung** (MapLibre, OpenFreeMap), ohne Internet oder im Modus Leicht eine Skizze.
+Mit den Knöpfen links oben auf der Karte schaltest du das Gelände 3D ein und aus oder gehst zurück zur Übersicht. Zwei Finger drehen und kippen die Karte.
+
+**Zwei Modi** (Knopf "Modus" oben): **Leicht** ist für ältere Handys, ohne Karte und ohne 3D, spart Arbeitsspeicher und Daten.
+**3D** ist für Computer, mit Karte und der **3D-Ansicht einer Baustelle** (Knopf "3D-Ansicht": jede Maschine in 3D, die Baustelle passt zu Sparte und Maschinen, mit Bedarfstafel). Beim ersten Öffnen wählt die Seite nach Gerät, die Wahl wird gemerkt.
 Im Demo-Modus sind die Positionen der Baustellen Beispielwerte.
 Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst keinen Ton.
 
 - Klick auf eine Baustelle: rechts siehst du ihre Maschinen
-- Defekte Maschine: "Reparieren"
-- Gelbe Maschine: "Tanken" oder "Nachliefern" (wenn Material fehlt)
-- "Zurück" schickt eine Maschine in den Werkhof, "+ Maschine" holt sie aus dem Werkhof auf die gewählte Baustelle
-- Oben filterst du nach Sparte
+- Bedarf: Auf der Baustelle frei schreiben, was gebraucht wird, abhaken wenn erledigt (alle Freigegebenen). Es gibt bewusst keine Prozentanzeigen für Material
+- Läuft eine Maschine nicht: "Defekt", "Material fehlt" oder "Diesel fehlt" melden. Danach "Repariert", "Nachgeliefert" oder "Getankt"
+- "Werkhof" schickt eine Maschine in den Werkhof zurück, bei "Aus dem Werkhof einsetzen" holst du sie auf die gewählte Baustelle
+- Oben filterst du nach Sparte, mehrere gleichzeitig sind möglich (zum Beispiel Gartenbau und Strassenbau)
 - Live-Modus: "+ Baustelle" (mit Adresssuche oder Kartenklick), "+ Maschine", Admins verwalten "Benutzer"
 
 ## Ordner
@@ -22,7 +25,7 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 - `public/config.js`: Einstellungen (Supabase-Adresse, anon-Key, Werkhof)
 - `supabase/schema.sql`: Tabellen und Zugriffsregeln; `supabase/beispieldaten.sql`: optionale Beispieldaten
 - `SUPABASE-ANLEITUNG.md`: Datenbank einrichten
-- `tests/`: automatische Tests (`bash tests/db_test.sh`, `python3 tests/app_test.py`)
+- `tests/`: automatische Tests (`bash tests/db_test.sh`, `python3 tests/app_test.py`). Das echte 3D-Bild prüfen sie nicht, das muss man einmal selbst ansehen
 - `GITHUB-ANLEITUNG.md`: was du bei GitHub machst, was Claude Code macht, und wie die Seite für mehrere Handys online geht
 - `CLAUDE.md`: das Gedächtnis des Projekts, Claude Code liest es bei jedem Start
 - `.claude/agents/tester.md`: Spezialist, der Änderungen prüft

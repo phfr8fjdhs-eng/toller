@@ -1430,7 +1430,8 @@ function close3D(){
   Object.keys(v.mats).forEach(k => kill(v.mats[k]));
   try{ v.renderer.dispose(); v.renderer.forceContextLoss(); }catch(e){}
   v.canvas.remove();
-  if(v3Opener && v3Opener.isConnected){ try{ v3Opener.focus(); }catch(e){} }
+  const back = v3Opener && v3Opener.isConnected ? v3Opener : $("open3dBtn");      // die Detailansicht wird oft neu gezeichnet, dann gibt es den alten Knopf nicht mehr
+  if(back){ try{ back.focus(); }catch(e){} }
   v3Opener = null;
 }
 
