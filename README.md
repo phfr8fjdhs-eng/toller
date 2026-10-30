@@ -20,6 +20,7 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 - "Werkhof" schickt eine Maschine in den Werkhof zurück, bei "Aus dem Werkhof einsetzen" holst du sie auf die gewählte Baustelle
 - Oben filterst du nach Sparte, mehrere gleichzeitig sind möglich (zum Beispiel Gartenbau und Strassenbau)
 - Live-Modus: "+ Baustelle" (mit Adresssuche oder Kartenklick), "+ Maschine", Admins verwalten "Benutzer"
+- Admin: Im Fenster "Neue Baustelle" kannst du den Text einer Offerte oder Beschreibung einfügen. Du bekommst einen Vorschlag für Name, Sparte, Ort auf der Karte und Bedarf. Du prüfst und speicherst. Preise werden nicht übernommen und der Text wird nicht gespeichert (PDF: Text kopieren)
 
 ## Ordner
 - `public/index.html`: die ganze Seite
@@ -27,7 +28,7 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 - `public/materialien.js`: Materialkatalog für "Material fehlt" (Vorschlagsliste, bitte an die Firma anpassen)
 - `supabase/schema.sql`: Tabellen und Zugriffsregeln; `supabase/beispieldaten.sql`: optionale Beispieldaten
 - `SUPABASE-ANLEITUNG.md`: Datenbank einrichten
-- `tests/`: automatische Tests (`bash tests/db_test.sh`, `python3 tests/app_test.py`). Das echte 3D-Bild prüfen sie nicht, das muss man einmal selbst ansehen
+- `tests/`: automatische Tests (`bash tests/db_test.sh`, `python3 tests/app_test.py`, `python3 tests/speicher_test.py`). Das echte 3D-Bild prüfen sie nicht, das muss man einmal selbst ansehen
 - `GITHUB-ANLEITUNG.md`: was du bei GitHub machst, was Claude Code macht, und wie die Seite für mehrere Handys online geht
 - `CLAUDE.md`: das Gedächtnis des Projekts, Claude Code liest es bei jedem Start
 - `.claude/agents/tester.md`: Spezialist, der Änderungen prüft

@@ -102,16 +102,20 @@
       let rows = T.filter(r => canRead(r) && this.fl.every(f => f(r)));
       if(this.op === "insert"){
         if(isProf || !approved()) return { data:null, error:rls };
-        const row = Object.assign({ id:this.t === "activity" ? db.seq++ : nid(), created_at:new Date().toISOString() }, this.t === "machines" ? { typ:"", status:"off", reason:"", site_id:null } : {}, this.t === "needs" ? { author:"", done:false, done_by:"", done_at:null, created_by:(me() || {}).id } : {}, this.row);
-        if(this.t === "materials"){                                         // wie der Trigger materials_stamp und der eindeutige Index
-          row.name = String(row.name || "").replace(/\s+/g, " ").trim();
-          row.author = me().name; row.created_by = me().id;
-          if(row.name.length < 2 || row.name.length > 60) return { data:null, error:{ message:"violates check constraint" } };
-          if(T.some(x => x.name.toLowerCase() === row.name.toLowerCase())) return { data:null, error:{ code:"23505", message:"duplicate key value violates unique constraint" } };
+        const made = [];
+        for(const src of (Array.isArray(this.row) ? this.row : [this.row])){       // eine Zeile oder mehrere auf einmal
+          const row = Object.assign({ id:this.t === "activity" ? db.seq++ : nid(), created_at:new Date().toISOString() }, this.t === "machines" ? { typ:"", status:"off", reason:"", site_id:null } : {}, this.t === "needs" ? { author:"", done:false, done_by:"", done_at:null, created_by:(me() || {}).id } : {}, src);
+          if(this.t === "materials"){                                         // wie der Trigger materials_stamp und der eindeutige Index
+            row.name = String(row.name || "").replace(/\s+/g, " ").trim();
+            row.author = me().name; row.created_by = me().id;
+            if(row.name.length < 2 || row.name.length > 60) return { data:null, error:{ message:"violates check constraint" } };
+            if(T.some(x => x.name.toLowerCase() === row.name.toLowerCase())) return { data:null, error:{ code:"23505", message:"duplicate key value violates unique constraint" } };
+          }
+          if(this.t === "machines") stamp(row, null);
+          made.push(row);
         }
-        if(this.t === "machines") stamp(row, null);
-        T.push(row); emit(this.t, "INSERT", row);
-        return this.sel ? { data:this.one ? row : [row], error:null } : { data:null, error:null };
+        made.forEach(row => { T.push(row); emit(this.t, "INSERT", row); });
+        return this.sel ? { data:this.one ? made[0] : made, error:null } : { data:null, error:null };
       }
       if(this.op === "update"){
         if(isProf ? !admin() : !approved()) return { data:[], error:null };

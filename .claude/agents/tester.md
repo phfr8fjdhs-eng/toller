@@ -21,5 +21,8 @@ Prüfe nach jeder Änderung:
 12. Meldungen: Steht bei jeder Meldung, wer sie abgeschickt hat und wann, und setzt das die Datenbank (nicht die Seite)? Gibt "Nachgeliefert" nur Maschinen frei, die auf dasselbe Material warten? Entsteht ein eigenes Material nur durch den ausdrücklichen Tipp auf "neu hinzufügen"? Dürfen alle Freigegebenen eigene Materialien eintippen, aber nur Schreiber und Admins löschen?
 13. Modi: Werden im Modus Leicht MapLibre und three.js nie geladen? Gibt es die 3D-Ansicht nur im Modus 3D? Gibt `close3D()` alle Ressourcen frei (Renderer, Texturen, Materialien, Körper, Ereignisse), auch beim Wechsel auf Leicht und bei einer gelöschten Baustelle? Zeigt das 3D-Fenster Störungen auch als Banner und den Status nicht nur über Farbe?
 
+14. Speicher: Braucht die Änderung auf dem Handy mehr Arbeitsspeicher (neue Bibliothek, grosse Listen, Dinge die im Speicher bleiben, Ereignisse die nicht entfernt werden)? Lädt sie erst bei Gebrauch? Hält `tests/speicher_test.py` seine Grenzen? Nutzt neuer Code Sprachmittel, die auf alten Handys die ganze Seite lahmlegen (`\p{L}`, Lookbehind in Regex)?
+15. Offerten-Import: Landen Preise, Kundendaten oder der Rohtext irgendwo in der Datenbank oder im Protokoll? Wird alles nur mit `textContent` gezeigt? Ersetzt ein Vorschlag nie einen getippten Namen? Ist das Feld nur für Admins sichtbar?
+
 Antworte kurz auf Deutsch: was ist gut, was ist fehlerhaft, was soll geändert werden.
 Ändere selbst keinen Code.

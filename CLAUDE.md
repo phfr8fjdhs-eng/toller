@@ -28,6 +28,8 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - **3D-Ansicht einer Baustelle** (nur Modus 3D, Knopf "3D-Ansicht" in der Detailansicht): three.js 0.147.0 und OrbitControls von unpkg, erst beim Öffnen geladen. Jede Maschine ist aus einfachen Körpern gebaut (`MODELS3`), der Boden hängt von Sparte und Maschinen ab (`ground3`). Status als Ring und Leuchte in den Status-Farben plus Text am Namensschild, Bedarfstafel mit den offenen Texten (nur `fillText`). Höchstens 24 Maschinen gezeigt (mit Hinweis). `close3D()` gibt alle Ressourcen frei. Die Version ist absichtlich fest: ab 0.148 gibt es `examples/js` nicht mehr
 - 3D-Karte: MapLibre GL JS (unpkg), Stil "positron" von OpenFreeMap (kein Schlüssel), Höhendaten von AWS Terrain Tiles. Ohne Internet bleibt die Skizze als Ersatz
 - Adresssuche beim Anlegen einer Baustelle: swisstopo SearchServer (kostenlos). Noch nicht gegen den echten Dienst getestet
+- **Baustelle aus Offerte oder Beschreibung (nur Admin, in der Seite):** Im Fenster "Neue Baustelle" fügt der Admin Text ein, `parseOffer` schlägt Name, Sparte, Adressen und Bedarfszeilen vor (reiner Text, keine Bibliothek, kein PDF-Lesen). Die erste Adresse wird über swisstopo gesucht und als Ort vorgeschlagen, weitere Adressen aus dem Text stehen als Knopf zur Wahl (der Absender der Offerte steht oft im Kopf). Der Admin prüft und wählt Zeilen ab oder ändert sie. Gespeichert wird nur das Gewählte: Baustelle und Bedarf (`addNeeds`, ein Speichern). **Preise, Summen und Kundendaten werden entfernt, der Rohtext wird nie gespeichert.** Eine geratene erste Zeile ersetzt nie einen getippten Namen. Die Rechte in der Datenbank sind unverändert (Baustellen und Bedarf dürfen alle Freigegebenen anlegen), das Feld ist nur für Admins sichtbar. Der Parser nutzt bewusst keine neueren Sprachmittel (`\p{L}`, Lookbehind), damit alte Handys die Seite weiter laden
+- **Speicher auf dem Handy ist wichtig:** Neue Funktionen laden erst bei Gebrauch, ohne Bibliotheken, Fenster werden beim Schliessen entfernt. `tests/speicher_test.py` misst Heap und Seitenelemente im Leicht-Modus (60 Baustellen, 180 Maschinen) und hält Grenzen ein. Gemessen ist nur der JavaScript-Heap, nicht Grafikspeicher
 - Gebiet: Rapperswil-Jona und Umgebung. Die Karte muss auf Handys flüssig laufen, darum bewusst schlank (kein 3D-Gebäude-Modell, Schalter "3D" für 2D-Ansicht, kompakte Marker bei weitem Zoom)
 - Veröffentlichung: Netlify veröffentlicht nur den Ordner `public` (siehe `netlify.toml`). Nur Dateien, die jeder sehen darf, gehören dort hinein. `CLAUDE.md`, Anleitungen, `supabase`, `tests` und `.claude` bleiben ausserhalb
 
@@ -63,14 +65,14 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Vor größeren Änderungen erst einen Plan zeigen
 
 ## Tests
-- Alles in `tests/`: `db_test.sh` (Schema und Zugriffsregeln auf lokaler PostgreSQL, braucht Root-Rechte), `app_test.py` (Seite im Browser mit Ersatz-Datenbank aus `stubs.js`, braucht Playwright)
+- Alles in `tests/`: `db_test.sh` (Schema und Zugriffsregeln auf lokaler PostgreSQL, braucht Root-Rechte), `app_test.py` (Seite im Browser mit Ersatz-Datenbank aus `stubs.js`, braucht Playwright), `speicher_test.py` (Heap und Seitenelemente im Leicht-Modus, braucht Playwright)
 - Vor jedem Hochladen laufen lassen. Die Tests ersetzen nicht den Test gegen echtes Supabase und die echte Karte
 - Die Browser-Tests laufen ohne Zufall (`Math.random` ist festgelegt), weil die Demo sonst von selbst Störungen meldet und Ergebnisse schwanken. Die Simulation prüft ein eigener Test
 - `stubs.js` ersetzt auch three.js: die Tests prüfen, dass je Maschine ein Modell entsteht, Texte auf den Schildern stehen, bei Änderungen neu gebaut und beim Schliessen alles freigegeben wird. **Das echte 3D-Bild (Form der Maschinen, Kamera, Licht, Blinken) ist damit nicht geprüft** und muss einmal auf einem Computer mit echtem WebGL angesehen werden
 
 ## Befehle
 - Starten: `public/index.html` im Browser öffnen (Demo-Modus)
-- Tests: `bash tests/db_test.sh` und `python3 tests/app_test.py`
+- Tests: `bash tests/db_test.sh`, `python3 tests/app_test.py` und `python3 tests/speicher_test.py`
 
 ## Aufgaben für später
 - Erster Test gegen ein echtes Supabase-Projekt (Anmeldung, Freigabe, Echtzeit, Adresssuche, Tabellen needs und materials, Absender an Meldungen)

@@ -9,6 +9,25 @@ STUBS = open(DIR + "/stubs.js", encoding="utf-8").read()
 NO_RANDOM = "Math.random = () => 0.5;"
 CONFIG = 'window.APP_CONFIG={supabaseUrl:"https://x.supabase.co",supabaseKey:"anon-test",depot:{lat:47.234,lng:8.86}};'
 
+# Erfundene Offerte. Enthaelt absichtlich Preise, Kundendaten und Zeichen, die nie in der Datenbank landen duerfen.
+OFFERTE = """Muster Bau AG
+Industriestrasse 5, 8640 Rapperswil
+Tel. 055 123 45 67  info@muster.ch
+
+Offerte Nr. 2026-118
+Bauvorhaben: Werkleitungen und Belag Bahnhofstrasse
+Baustellenadresse: Bahnhofstrasse 12, 8645 Jona
+Kunde: Hans Beispiel, Geheimweg 9
+
+1.1 Aushub Graben, Material seitlich lagern 120 m\u00b3 45.00 5'400.00
+1.2 Kanalrohr PP DN 200 liefern und verlegen 85 m 120.50 10'242.50
+1.3.1 Kies 0/32 ca. 20 m\u00b3 \u00e0 CHF 38.00 CHF 760.00
+2.2 Deckbelag AC 11 12 t 210.00 2'520.00
+Zwischentotal 22'122.50
+Total CHF 23'914.63
+Zahlbar innert 30 Tagen <img src=x onerror="window.__xss=1">
+"""
+
 errors = []
 checks = []
 
@@ -69,6 +88,35 @@ with sync_playwright() as p:
     d.click("#addSiteBtn"); d.click("text=Baustelle speichern")
     check("Demo: leeres Formular wird abgelehnt", "Bitte einen Namen" in d.inner_text("#modal"))
     d.click("#modal >> text=Schliessen")
+
+    # Baustelle aus Offerte (Admin): Vorschlag, pruefen, speichern
+    od = new_page(b, False); od.goto(URL + "?modus=3d"); od.wait_for_timeout(600)
+    pr = od.evaluate("t => parseOffer(t)", OFFERTE)
+    check("Offerte: Name, Sparte und Adresse werden erkannt", pr["name"] == "Werkleitungen und Belag Bahnhofstrasse" and pr["sparte"] == "tief" and pr["addrs"][0] == "Bahnhofstrasse 12, 8645 Jona", str(pr))
+    check("Offerte: Bedarfszeilen ohne Preise, Summen und Positionsnummern", pr["needs"] == ["Aushub Graben, Material seitlich lagern 120 m\u00b3", "Kanalrohr PP DN 200 liefern und verlegen 85 m", "Kies 0/32 ca. 20 m\u00b3", "Deckbelag AC 11 12 t"], str(pr["needs"]))
+    check("Offerte: beschriftete Baustellenadresse steht zuerst, Absender und Kunde nur als weitere Wahl", len(pr["addrs"]) == 3 and "Industriestrasse" in pr["addrs"][1] and "Geheimweg" in pr["addrs"][2], str(pr["addrs"]))
+    ge = od.evaluate("t => parseOffer(t)", "Neue Bepflanzung mit Hecke und Rasen, Humus 15 m\u00b3; Mulch 8 m\u00b3")
+    check("Offerte: Beschreibung fuer Gartenbau wird als Garten erkannt, mehrere Mengen werden getrennt", ge["sparte"] == "garten" and ge["needs"] == ["Neue Bepflanzung mit Hecke und Rasen, Humus 15 m\u00b3", "Mulch 8 m\u00b3"], str(ge))
+    check("Offerte: unklare Sparte bleibt leer (kein Raten)", od.evaluate("t => parseOffer(t).sparte", "Bauleitung und Besprechung") is None and od.evaluate("t => parseOffer(t).sparte", "Asphalt Rasen") is None)
+    check("Offerte: leerer Text gibt nichts", od.evaluate("parseOffer('')") == {"name": "", "nameSure": False, "sparte": None, "addrs": [], "needs": []})
+    check("Offerte: riesiger Text bleibt schnell (20000 Zeichen)", od.evaluate("(()=>{const t0=performance.now(); parseOffer('Kies 20 m\u00b3 '.repeat(5000)); return performance.now()-t0})()") < 500)
+
+    od.click("#addSiteBtn")
+    check("Offerte: Feld ist fuer den Admin da und zunaechst zugeklappt", od.locator("#offerBox").count() == 1 and not od.locator("#f-offer").is_visible())
+    od.click("#offerBox summary"); od.fill("#f-offer", OFFERTE)
+    od.click("#offerGo"); od.wait_for_timeout(500)
+    check("Offerte: Vorschlag fuellt Name, Sparte und Ort", od.input_value("#f-name") == "Werkleitungen und Belag Bahnhofstrasse" and od.input_value("#f-sparte") == "tief" and od.input_value("#f-lat") == "47.22710" and od.input_value("#f-lng") == "8.84040")
+    check("Offerte: Meldung nennt, was erkannt wurde, und bittet um Pruefung", "Bitte alles prüfen" in od.inner_text("#offerMsg") and "4 Bedarfszeilen" in od.inner_text("#offerMsg"), od.inner_text("#offerMsg"))
+    check("Offerte: 4 Bedarfszeilen mit Haekchen, andere Adresse als Knopf", od.locator("#offerNeeds input[type=checkbox]:checked").count() == 4 and od.locator("#modal .results button", has_text="Industriestrasse").count() == 1)
+    check("Offerte: ohne Speichern ist noch nichts angelegt", not any(x["name"].startswith("Werkleitungen") for x in od.evaluate("sites")))
+    od.locator("#offerNeeds .offneed input[type=checkbox]").nth(3).uncheck()
+    od.locator("#offerNeeds .offneed input[type=text]").nth(2).fill("Kies 0/32 · 25 m\u00b3 bis Mittwoch")
+    od.click("text=Baustelle speichern"); od.wait_for_timeout(300)
+    ns = od.evaluate("(()=>{const s=sites.find(x=>x.name.startsWith('Werkleitungen')); return s ? needs.filter(n=>n.site===s.id).map(n=>n.text) : null})()")
+    check("Offerte: Baustelle angelegt, nur gewaehlte und geaenderte Zeilen sind als Bedarf gespeichert", ns is not None and sorted(ns) == sorted(["Aushub Graben, Material seitlich lagern 120 m\u00b3", "Kanalrohr PP DN 200 liefern und verlegen 85 m", "Kies 0/32 · 25 m\u00b3 bis Mittwoch"]), str(ns))
+    check("Offerte: Bedarf steht in der Detailansicht der neuen Baustelle", od.locator("#detail .need").count() == 3 and "Bedarf aus Offerte: 3 Zeilen" in od.inner_text("#log"), str(od.locator("#detail .need").count()))
+    check("Offerte: Preise, Kundendaten und Rohtext stehen nirgends", not any(w in od.evaluate("JSON.stringify([sites, needs])") for w in ["5'400", "38.00", "Geheimweg", "Hans Beispiel", "Zahlbar", "Total", "info@muster"]))
+    check("Offerte: Fremdtext wird nur als Text gezeigt (kein Skript, kein Bild)", od.evaluate("window.__xss") is None and od.locator("#modal img, #detail img").count() == 0)
 
     # Baustellen-Szene (SVG)
     check("Szene: jeder Marker hat eine Szene", d.locator("#lmap .lm .site .scene").count() == d.locator("#lmap .lm .site").count())
@@ -359,6 +407,26 @@ with sync_playwright() as p:
     check("Live: Speicherfehler wird gemeldet", pg.locator("#toast.err").count() == 1 and "Netzwerkfehler" in pg.inner_text("#toast"))
     check("Live: nach Speicherfehler wieder Stand der Datenbank", pg.evaluate("window.__db.machines[0].status") == "running")
 
+    # Baustelle aus Offerte (Admin) mit echter Speicherung, Ortswahl ueber die Karte behaelt die Zeilen
+    pg.click("#addSiteBtn"); pg.click("#offerBox summary"); pg.fill("#f-offer", OFFERTE)
+    pg.click("#offerGo"); pg.wait_for_timeout(500)
+    pg.click("#modal >> text=Ort auf der Karte wählen")
+    pg.evaluate("window.__mapClick(47.26, 8.86)"); pg.wait_for_timeout(200)
+    check("Live Offerte: Ortswahl auf der Karte behaelt Name und Bedarfszeilen", pg.input_value("#f-name") == "Werkleitungen und Belag Bahnhofstrasse" and pg.input_value("#f-lat") == "47.26000" and pg.locator("#offerNeeds input[type=checkbox]:checked").count() == 4)
+    n_before = len(pg.evaluate("window.__db.needs"))
+    pg.click("text=Baustelle speichern"); pg.wait_for_timeout(500)
+    sid = pg.evaluate("window.__db.sites.find(s => s.name.startsWith('Werkleitungen')).id")
+    nn = [n["text"] for n in pg.evaluate("window.__db.needs") if n["site_id"] == sid]
+    check("Live Offerte: Baustelle und 4 Bedarfszeilen stehen in der Datenbank (ein Speichern)", len(nn) == 4 and len(pg.evaluate("window.__db.needs")) == n_before + 4, str(nn))
+    check("Live Offerte: in der Datenbank nur Auswahl, keine Preise, Kundendaten, Rohtext", not any(w in json.dumps([pg.evaluate("window.__db.sites"), pg.evaluate("window.__db.needs"), pg.evaluate("window.__db.activity")]) for w in ["5'400", "38.00", "Geheimweg", "Hans Beispiel", "Zahlbar", "info@muster", "onerror"]))
+    pg.evaluate("window.__db.failNext = {table:'needs', msg:'kaputt'}")
+    pg.click("#addSiteBtn"); pg.fill("#f-name", "Mit Fehler"); pg.fill("#f-lat", "47.2"); pg.fill("#f-lng", "8.8")
+    pg.click("#offerBox summary"); pg.fill("#f-offer", "Kies 0/32 20 m\u00b3"); pg.click("#offerGo"); pg.wait_for_timeout(400)
+    check("Live Offerte: ein getippter Name wird nicht durch eine geratene erste Zeile ersetzt", pg.input_value("#f-name") == "Mit Fehler")
+    pg.fill("#f-lat", "47.2"); pg.fill("#f-lng", "8.8")
+    pg.click("text=Baustelle speichern"); pg.wait_for_timeout(500)
+    check("Live Offerte: scheitert nur der Bedarf, bleibt die Baustelle bestehen und der Fehler wird gemeldet", any(x["name"] == "Mit Fehler" for x in pg.evaluate("window.__db.sites")) and "Bedarf konnte nicht gespeichert werden" in pg.inner_text("#toast"), pg.inner_text("#toast"))
+
     pg.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_admin.png"), full_page=False)
 
     # Zweite Person: nicht freigegeben
@@ -375,6 +443,9 @@ with sync_playwright() as p:
     pg.click("#pendingCheck"); pg.wait_for_timeout(500)
     check("Live: nach Freigabe sieht Mitarbeiter Daten", not pg.locator("#pending").is_visible() and pg.locator("#siteList .item").count() >= 2)
     check("Live: Mitarbeiter hat keinen Benutzer-Knopf", not pg.locator("#usersBtn").is_visible())
+    pg.click("#addSiteBtn")
+    check("Live: Mitarbeiter (kein Admin) sieht das Offerten-Feld nicht, normales Formular geht weiter", pg.locator("#offerBox").count() == 0 and pg.locator("#f-name").count() == 1)
+    pg.click("#modal >> text=Schliessen")
     pg.click("#siteList .item >> text=Kanal Jona"); pg.wait_for_timeout(200)
     check("Live: Mitarbeiter sieht fremden Bedarf, aber keinen Loeschen-Knopf dafuer", pg.locator("#detail .need").count() == 1 and pg.locator("#detail .need button", has_text="Löschen").count() == 0)
     pg.fill("#needInput", "Eigener Eintrag"); pg.press("#needInput", "Enter"); pg.wait_for_timeout(300)
@@ -415,8 +486,9 @@ with sync_playwright() as p:
     pg.click("#modal >> text=Schliessen")
 
     pg.click("#siteList .item >> text=Kanal Jona")
+    n_sites = len(pg.evaluate("window.__db.sites"))
     pg.click("#detail >> text=Baustelle löschen")
-    check("Live: Loeschen braucht zweiten Tipp", len(pg.evaluate("window.__db.sites")) == 3 and "Sicher" in pg.inner_text("#detail"))
+    check("Live: Loeschen braucht zweiten Tipp", len(pg.evaluate("window.__db.sites")) == n_sites and "Sicher" in pg.inner_text("#detail"))
     pg.click("#detail >> text=Sicher"); pg.wait_for_timeout(400)
     check("Live: Baustelle geloescht", pg.evaluate("window.__db.sites.some(s=>s.name=='Kanal Jona')") is False)
     check("Live: Maschine der Baustelle im Werkhof", pg.evaluate("window.__db.machines[0].site_id") is None and pg.evaluate("window.__db.machines[0].status") == "off")
@@ -432,6 +504,10 @@ with sync_playwright() as p:
     mob.click("#addSiteBtn")
     check("Handy: Formular ohne seitliches Scrollen", not mob.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
     mob.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_form_handy.png"))
+    mob.click("#offerBox summary"); mob.fill("#f-offer", OFFERTE); mob.click("#offerGo"); mob.wait_for_timeout(400)
+    check("Handy: Offerten-Vorschlag ohne seitliches Scrollen", not mob.evaluate("document.documentElement.scrollWidth > window.innerWidth") and mob.locator("#offerNeeds .offneed").count() == 4)
+    check("Handy: Haekchen und Knoepfe im Offerten-Formular sind gross genug (mind. 22 px Haekchen, 40 px Knopf)", mob.evaluate("document.querySelector('#offerNeeds input[type=checkbox]').getBoundingClientRect().height") >= 22 and mob.evaluate("document.querySelector('#offerGo').getBoundingClientRect().height") >= 40, str(mob.evaluate("document.querySelector('#offerGo').getBoundingClientRect().height")))
+    mob.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_offerte_handy.png"))
     mob.click("#modal >> text=Schliessen")
     mob.locator('#detail .mrow button:has-text("Material fehlt")').first.click(); mob.wait_for_timeout(200)
     mob.fill("#matSearch", "kies")

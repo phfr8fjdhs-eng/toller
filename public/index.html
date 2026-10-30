@@ -114,8 +114,17 @@
   .log{font-size:12px;color:var(--muted);padding:3px 0}
   .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
   #siteList{max-height:300px;overflow:auto;margin-top:8px}
-  input,select{background:#0f1419;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;width:100%}
+  input,select,textarea{background:#0f1419;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;width:100%}
   input[type=number]{width:auto}
+  textarea{resize:vertical;min-height:90px}
+  .offer{border:1px solid var(--line);border-radius:8px;padding:0 10px}
+  .offer summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:14px}
+  .offer .form{padding-bottom:10px}
+  .offer p{margin:8px 0 0;font-size:13px;line-height:1.4}
+  .offer button{min-height:44px}
+  .offneed{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center;min-height:44px}
+  .offneed input[type=text]{min-height:40px}
+  .offneed input[type=checkbox]{width:22px;height:22px}
 
   #lmap{position:absolute;inset:0;display:none;background:#121a22}
   #map.real{aspect-ratio:auto;height:560px;min-height:0}
@@ -592,14 +601,33 @@ function upsertMachine(m){
 }
 
 async function createSite(v){
+  let s;
   if(!LIVE){
-    const s = { id:"n" + (++localId), name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng };
+    s = { id:"n" + (++localId), name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng };
     sites.push(s); selectSite(s.id); addLog("Neue Baustelle: " + s.name);
-    return true;
+  }else{
+    const r = await sb.from("sites").insert({ name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng }).select().single();
+    if(r.error){ toast("Baustelle konnte nicht gespeichert werden: " + r.error.message, true); return false; }
+    s = mapSite(r.data);
+    upsertSite(s); selectSite(r.data.id); addLog("Neue Baustelle: " + r.data.name);
   }
-  const r = await sb.from("sites").insert({ name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng }).select().single();
-  if(r.error){ toast("Baustelle konnte nicht gespeichert werden: " + r.error.message, true); return false; }
-  upsertSite(mapSite(r.data)); selectSite(r.data.id); addLog("Neue Baustelle: " + r.data.name);
+  if(v.needs && v.needs.length) await addNeeds(s, v.needs);
+  return true;
+}
+
+// Mehrere Bedarfszeilen auf einmal (aus einer Offerte): ein Speichern, ein Neuzeichnen
+async function addNeeds(s, texts){
+  texts = texts.map(t => String(t).replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean).slice(0, 30);
+  if(!texts.length) return false;
+  if(!LIVE){
+    texts.slice().reverse().forEach(text => needs.unshift({ id:"b" + (++localId), site:s.id, text, author:"Demo", createdBy:"demo", createdAt:new Date().toISOString(), done:false, doneBy:"" }));
+  }else{
+    if(!needsOk){ toast("Bedarf nicht gespeichert: Datenbank-Update nötig (schema.sql erneut ausführen).", true); return false; }
+    const r = await sb.from("needs").insert(texts.map(text => ({ site_id:s.id, text, author:(me.name || "").slice(0, 60) }))).select();
+    if(r.error){ toast("Bedarf konnte nicht gespeichert werden: " + r.error.message, true); return false; }
+    r.data.forEach(row => upsertNeed(mapNeed(row)));
+  }
+  addLog("Bedarf aus Offerte: " + texts.length + (texts.length === 1 ? " Zeile" : " Zeilen") + " (" + s.name + ")"); render();
   return true;
 }
 
@@ -1801,35 +1829,157 @@ async function searchAddress(q){
     .map(r => ({ label:String(r.attrs.label || "").replace(/<[^>]*>/g, ""), lat:r.attrs.lat, lng:r.attrs.lon }));
 }
 
+/* ---------- Beschreibung / Offerte -> Vorschlag für eine neue Baustelle ----------
+   Reiner Text, keine Bibliothek, wird erst beim Tipp auf "Vorschlag erstellen" gebraucht. Nichts wird gespeichert,
+   ausser was der Admin danach auswählt. Preise, Summen und Kundendaten werden nicht übernommen. Nur ein Vorschlag. */
+const OFFER_WORDS = {
+  garten:  ["garten","rasen","bepflanz","pflanz","hecke","baume","baumpflanz","baumschnitt","obstbaum","strauch","staude","rabatte","humus","mulch","bewasser","geholz","wiese","teich"],
+  strasse: ["strassenbau","asphalt","belag","deckschicht","tragschicht","randstein","trottoir","fahrbahn","fras","bankett","markierung","strassenkoffer"],
+  tief:    ["kanal","leitung","wasserleitung","gasleitung","abwasser","aushub","rohr","schacht","baugrube","fundament","entwasser","drainage","graben","kabel","tiefbau","hinterfull","werkleitung"]
+};
+let offerRx = null;
+const OFFER_QTY = /(?:^|[^A-Za-zÀ-ÖØ-öø-ÿ\d])\d+(?:[.,]\d+)?\s?(?:m³|m3|m²|m2|lfm|stk\.?|stück|stueck|st\.|kg|to|t|l|liter|std\.?|m)(?![A-Za-zÀ-ÖØ-öø-ÿ\d])/i;
+const OFFER_SKIP = /\b(?:total|summe|zwischentotal|mwst|mehrwertsteuer|rabatt|skonto|gesamt|netto|brutto|zahlbar|iban|seite)\b|@|www\.|https?:/i;
+function parseOffer(text){
+  text = String(text || "").slice(0, 20000);
+  const lines = text.split(/\r?\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const out = { name:"", nameSure:false, sparte:null, addrs:[], needs:[] };
+  const labelled = re => { for(const l of lines){ const m = l.match(re); if(m && m[1].trim().length > 2) return m[1].trim(); } return ""; };
+
+  const first = lines.find(l => /[A-Za-zÀ-ÿ]{3}/.test(l) && !OFFER_QTY.test(l) && !/^(?:offerte|angebot|datum|seite|kunde|rechnung|tel|e-?mail|www)\b/i.test(l)) || "";
+  const lab = labelled(/^(?:objekt|projekt|bauvorhaben|bauobjekt|baustelle|betreff|bezeichnung|auftrag)\s*[:\-–]\s*(.+)$/i);
+  out.nameSure = !!lab;                                    // Name stand beschriftet im Text (sonst nur die erste Zeile geraten)
+  out.name = (lab || first.split(/[:;]|\.\s/)[0].trim().slice(0, 60)).slice(0, 80);
+
+  const addrs = out.addrs;
+  const addA = a => {
+    a = a.replace(/\s+/g, " ").replace(/^[,;:\s]+|[,;:\s]+$/g, "").slice(0, 100);
+    if(a.length > 3 && !addrs.some(x => fold(x) === fold(a))) addrs.push(a);
+  };
+  addA(labelled(/^(?:adresse|baustellenadresse|objektadresse|standort|bauplatz|ort|baustelle)\s*[:\-–]\s*(.+)$/i));
+  const ST = /([A-Za-zÀ-ÿ.\-]*(?:strasse|straße|str\.|weg|gasse|platz|allee|rain|ring|steig|halde|matte|hof)[  ]+\d{1,4}[ ]?[a-z]?)(?:[ ]*,?[ ]*([1-9]\d{3})[ ]+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-]+))?/gi;
+  for(const l of lines){
+    let m; ST.lastIndex = 0;
+    while((m = ST.exec(l))) addA(m[1] + (m[2] ? ", " + m[2] + " " + m[3] : ""));
+    if(addrs.length >= 4) break;
+  }
+  out.addrs = addrs.slice(0, 4);
+
+  if(!offerRx){
+    offerRx = {};
+    Object.keys(OFFER_WORDS).forEach(k => { offerRx[k] = new RegExp("(?:^|[^a-z0-9])(?:" + OFFER_WORDS[k].map(fold).join("|") + ")", "g"); });
+  }
+  const f = fold(text), score = {};
+  Object.keys(offerRx).forEach(k => { score[k] = (f.match(offerRx[k]) || []).length; });
+  const rank = Object.keys(score).sort((a, b) => score[b] - score[a]);
+  if(score[rank[0]] > 0 && score[rank[0]] > score[rank[1]]) out.sparte = rank[0];
+
+  const seen = new Set();
+  for(const raw of lines){
+    for(let seg of raw.split(/[;•▪●]|\.\s+(?=[A-ZÄÖÜ])/)){
+      seg = seg.trim();
+      if(seg.length < 4 || seg.length > 300 || OFFER_SKIP.test(seg) || !OFFER_QTY.test(seg)) continue;
+      const rest = seg.replace(/^(?:pos(?:ition)?\.?\s*)?\d+(?:\.\d+){1,3}\s+|^pos(?:ition)?\.?\s*\d+[.)]?\s+|^\d+[.)]\s+/i, "");
+      if(OFFER_QTY.test(rest)) seg = rest;
+      seg = seg.replace(/(?:CHF|Fr\.?)\s*[\d'’.,\-–]+/gi, " ")
+               .replace(/(?:\s+(?:[\d'’]+[.,]\d{1,2}|\d{1,3}(?:['’]\d{3})+|\d{4,}))+\s*$/, "")
+               .replace(/\s+à\s*$/i, "").replace(/\s+/g, " ").trim().slice(0, 120);
+      if(seg.length < 4 || !OFFER_QTY.test(seg) || seen.has(fold(seg))) continue;
+      seen.add(fold(seg)); out.needs.push(seg);
+      if(out.needs.length >= 20) return out;
+    }
+  }
+  return out;
+}
+
 function modalSite(draft){
-  draft = draft || { name:"", sparte:"tief", lat:"", lng:"" };
+  draft = draft || { name:"", sparte:"tief", lat:"", lng:"", needsAll:[] };
   const body = el("div", "form");
   const name = input("text", draft.name, "f-name"); name.maxLength = 80;
   const sparte = select([["garten","Gartenbau"],["strasse","Strassenbau"],["tief","Tiefbau"]], draft.sparte, "f-sparte");
   const lat = input("text", draft.lat, "f-lat"); lat.inputMode = "decimal";
   const lng = input("text", draft.lng, "f-lng"); lng.inputMode = "decimal";
+  // Bedarfszeilen aus einer Offerte: Häkchen und Text je Zeile, der Admin darf abwählen und ändern
+  let needRows = [];
+  const needsBox = el("div", "form"); needsBox.id = "offerNeeds";
+  const drawNeeds = list => {
+    needsBox.innerHTML = ""; needRows = [];
+    if(!list.length) return;
+    needsBox.appendChild(el("div", "sub", "Bedarf aus der Offerte (abwählen oder ändern)"));
+    list.forEach(n=>{
+      const row = el("div", "offneed");
+      const cb = input("checkbox", ""); cb.checked = n.on; cb.setAttribute("aria-label", "Zeile übernehmen");
+      const inp = input("text", n.t); inp.maxLength = 200;
+      row.appendChild(cb); row.appendChild(inp); needsBox.appendChild(row);
+      needRows.push({ cb, inp });
+    });
+  };
+
+  // Nur der Admin: Beschreibung oder Offerte einfügen -> Vorschlag für Name, Sparte, Ort und Bedarf
+  if(isAdmin()){
+    const det = el("details", "offer"); det.id = "offerBox";
+    det.appendChild(el("summary", "", "Aus Beschreibung / Offerte ausfüllen"));
+    const inner = el("div", "form");
+    inner.appendChild(el("p", "muted", "Text aus der Offerte oder Beschreibung hier einfügen (bei einer PDF-Datei den Text kopieren). Du bekommst einen Vorschlag zum Prüfen. Preise werden nicht übernommen, der Text selbst wird nicht gespeichert."));
+    const ta = el("textarea"); ta.id = "f-offer"; ta.rows = 6; ta.maxLength = 20000; ta.placeholder = "Text hier einfügen";
+    const go = el("button", "", "Vorschlag erstellen"); go.type = "button"; go.id = "offerGo";
+    const om = el("div", "msg"); om.id = "offerMsg";
+    inner.appendChild(ta); inner.appendChild(go); inner.appendChild(om);
+    det.appendChild(inner); body.appendChild(det);
+    go.onclick = ()=>{
+      if(!ta.value.trim()){ om.className = "msg err"; om.textContent = "Bitte zuerst den Text einfügen."; return; }
+      const p = parseOffer(ta.value), found = [], missing = [];
+      if(p.name && (p.nameSure || !name.value.trim())){ name.value = p.name; found.push("Name"); }
+      else if(p.name) found.push("Name bleibt wie getippt");
+      else missing.push("Name");
+      if(p.sparte){ sparte.value = p.sparte; found.push("Sparte"); } else missing.push("Sparte");
+      drawNeeds(p.needs.map(t => ({ t, on:true })));
+      if(p.needs.length) found.push(p.needs.length + (p.needs.length === 1 ? " Bedarfszeile" : " Bedarfszeilen")); else missing.push("Bedarf (keine Mengen erkannt)");
+      altBox.innerHTML = ""; results.innerHTML = "";
+      if(p.addrs.length){
+        found.push("Adresse"); addr.value = p.addrs[0]; doSearch(true);
+        p.addrs.slice(1).forEach(a=>{
+          const b = el("button", "", "Andere Adresse im Text: " + a); b.type = "button";
+          b.onclick = ()=>{ addr.value = a; altBox.innerHTML = ""; doSearch(true); };
+          altBox.appendChild(b);
+        });
+      }else missing.push("Adresse");
+      om.className = "msg ok";
+      om.textContent = "Vorschlag: " + found.join(", ") + "." + (missing.length ? " Nicht erkannt: " + missing.join(", ") + "." : "") + " Bitte alles prüfen.";
+    };
+  }
+
   body.appendChild(field("Name der Baustelle", name));
   body.appendChild(field("Sparte", sparte));
+  drawNeeds(draft.needsAll || []); body.appendChild(needsBox);
 
   body.appendChild(el("div", "sub", "Ort"));
   const addr = input("search", "", "f-addr"); addr.placeholder = "Adresse oder Ort suchen";
   const find = el("button", "", "Suchen");
   const arow = el("div", "row2"); arow.style.gridTemplateColumns = "1fr auto"; arow.appendChild(addr); arow.appendChild(find);
   body.appendChild(arow);
+  const altBox = el("div", "results"); body.appendChild(altBox);
   const results = el("div", "results"); body.appendChild(results);
   const amsg = el("div", "msg"); body.appendChild(amsg);
-  const doSearch = async ()=>{
+  const doSearch = async auto =>{
     const q = addr.value.trim(); if(!q) return;
     results.innerHTML = ""; amsg.className = "msg"; amsg.textContent = "Suche …";
     try{
       const list = await searchAddress(q);
-      amsg.textContent = list.length ? "Wähle einen Treffer:" : "Nichts gefunden. Tippe auf die Karte oder trage die Koordinaten ein.";
-      list.forEach(it=>{
-        const b = el("button", "", it.label);
-        b.type = "button";
-        b.onclick = ()=>{ lat.value = it.lat.toFixed(5); lng.value = it.lng.toFixed(5); results.innerHTML = ""; amsg.className = "msg ok"; amsg.textContent = "Ort übernommen."; };
+      const use = it =>{ lat.value = it.lat.toFixed(5); lng.value = it.lng.toFixed(5); };
+      const btn = it =>{
+        const b = el("button", "", it.label); b.type = "button";
+        b.onclick = ()=>{ use(it); results.innerHTML = ""; amsg.className = "msg ok"; amsg.textContent = "Ort übernommen."; };
         results.appendChild(b);
-      });
+      };
+      if(auto === true && list.length){                       // Vorschlag aus der Offerte: erster Treffer, der Admin prüft
+        use(list[0]); amsg.className = "msg ok";
+        amsg.textContent = "Vorschlag für den Ort: " + list[0].label + (list.length > 1 ? ". Falsch? Anderen Treffer wählen:" : ". Bitte prüfen.");
+        list.slice(1).forEach(btn);
+      }else{
+        amsg.textContent = list.length ? "Wähle einen Treffer:" : "Nichts gefunden. Tippe auf die Karte oder trage die Koordinaten ein.";
+        list.forEach(btn);
+      }
     }catch(e){
       amsg.className = "msg err";
       amsg.textContent = "Die Adresssuche ist gerade nicht erreichbar. Tippe auf die Karte oder trage die Koordinaten ein.";
@@ -1842,7 +1992,7 @@ function modalSite(draft){
   r2.appendChild(field("Breitengrad", lat)); r2.appendChild(field("Längengrad", lng));
   body.appendChild(r2);
 
-  const collect = ()=>({ name:name.value, sparte:sparte.value, lat:lat.value, lng:lng.value });
+  const collect = ()=>({ name:name.value, sparte:sparte.value, lat:lat.value, lng:lng.value, needsAll:needRows.map(r => ({ t:r.inp.value, on:r.cb.checked })) });
   if(lmap && mapReady){
     const pick = el("button", "", "Ort auf der Karte wählen"); pick.type = "button";
     pick.onclick = ()=>{
@@ -1868,7 +2018,7 @@ function modalSite(draft){
       msg.textContent = "Bitte einen gültigen Ort wählen (Adresse suchen, Karte antippen oder Koordinaten eintragen)."; return;
     }
     save.disabled = true;
-    const ok = await createSite({ name:nm, sparte:v.sparte, lat:la, lng:ln });
+    const ok = await createSite({ name:nm, sparte:v.sparte, lat:la, lng:ln, needs:needRows.filter(r => r.cb.checked).map(r => r.inp.value) });
     save.disabled = false;
     if(ok) closeModal();
   };
