@@ -26,5 +26,7 @@ Prüfe nach jeder Änderung:
 
 16. Anmeldung: Antwortet "Passwort vergessen" bei bekannten und unbekannten Adressen gleich? Kommt nach dem Link aus der Mail zuerst "Neues Passwort" und werden vorher keine Daten geladen? Steht nirgends ein Passwort oder Schlüssel im Code oder Protokoll?
 
+17. Verlauf: Schreibt nur der Trigger in `downtimes` (kein Insert, Update, Delete für Seite, Mitarbeiter oder Admin)? Stimmen Anzahl und Dauer (offene Einträge bis jetzt gezählt, eine Maschine nie doppelt offen)? Steht ehrlich dabei, was die Zeiten bedeuten und wenn nur ein Teil gezeigt wird? Keine Prozentzahlen? Lädt das Fenster erst beim Öffnen und gibt es beim Schliessen alles frei?
+
 Antworte kurz auf Deutsch: was ist gut, was ist fehlerhaft, was soll geändert werden.
 Ändere selbst keinen Code.

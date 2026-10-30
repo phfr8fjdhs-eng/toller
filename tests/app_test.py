@@ -466,6 +466,9 @@ with sync_playwright() as p:
     ma = pg.evaluate("window.__db.machines.find(m => m.reason.indexOf('Splittbett') > 0)")
     check("Mitarbeiter (kein Admin) darf eigenes Material eintippen und damit melden", ma is not None and ma["reported_name"] == "Neuling" and any(x["name"] == "Splittbett Spezial" and x["author"] == "Neuling" for x in pg.evaluate("window.__db.materials")), str(ma))
     check("Mitarbeiter: sieht an der Maschine, dass er selbst gemeldet hat", "gemeldet von Neuling" in pg.inner_text("#detail"))
+    pg.click("#historyBtn"); pg.wait_for_timeout(300)
+    check("Verlauf: Mitarbeiter (kein Admin) darf den Verlauf sehen, die Meldung steht mit Material und Absender drin", "Material fehlt: Splittbett Spezial" in pg.inner_text("#histBox") and "gemeldet von Neuling" in pg.inner_text("#histBox"), pg.inner_text("#histBox"))
+    pg.click("#modal >> text=Schliessen")
     pg.locator('#detail .mrow button:has-text("Material fehlt")').first.click(); pg.wait_for_timeout(100)
     pg.fill("#matSearch", "splittbett"); pg.wait_for_timeout(100)
     check("Mitarbeiter: darf den eigenen Eintrag loeschen", pg.locator("#matList .matrow", has_text="Splittbett Spezial").locator("button", has_text="Löschen").count() == 1)
@@ -492,6 +495,77 @@ with sync_playwright() as p:
     pg.click("#detail >> text=Sicher"); pg.wait_for_timeout(400)
     check("Live: Baustelle geloescht", pg.evaluate("window.__db.sites.some(s=>s.name=='Kanal Jona')") is False)
     check("Live: Maschine der Baustelle im Werkhof", pg.evaluate("window.__db.machines[0].site_id") is None and pg.evaluate("window.__db.machines[0].status") == "off")
+
+    # ============================================================ VERLAUF DER STOERUNGEN
+    print("=== VERLAUF ===")
+    hd = new_page(b, False); hd.goto(URL + "?modus=leicht"); hd.wait_for_timeout(600)
+    check("Verlauf Demo: Knopf ist da", hd.locator("#historyBtn").is_visible())
+    hd.click("#historyBtn")
+    check("Verlauf Demo: ohne Meldungen steht das ehrlich da (keine erfundenen Zahlen), mit Hinweis zur Demo", "keine Störung und keine Wartezeit" in hd.inner_text("#histBox") and "Demo: nur Meldungen dieser Sitzung" in hd.inner_text("#histBox"))
+    hd.click("#modal >> text=Schliessen")
+    hd.evaluate("setMachine(machines.find(m => m.id === 1), { status:'broken', reason:'' }, 'Bagger 1 ausgefallen')"); hd.wait_for_timeout(100)
+    hd.click("#historyBtn")
+    check("Verlauf Demo: Defekt erscheint mit Maschine, Baustelle, Art als Text und 'läuft noch'", all(w in hd.inner_text("#histBox") for w in ["Defekt", "Bagger 1", "Kanal Bahnhofstr.", "läuft noch", "Defekte: 1 (offen: 1)"]), hd.inner_text("#histBox"))
+    hd.click("#modal >> text=Schliessen")
+    hd.evaluate("setMachine(machines.find(m => m.id === 1), { status:'running', reason:'' }, 'repariert')")
+    hd.evaluate("setMachine(machines.find(m => m.id === 4), { status:'waiting', reason:'Material fehlt: Kies 0/32' }, 'x'); setMachine(machines.find(m => m.id === 4), { status:'waiting', reason:'Material fehlt: Kies 0/32 · ca. 20 m\u00b3' }, 'x')")
+    hd.click("#historyBtn")
+    txt = hd.inner_text("#histBox")
+    check("Verlauf Demo: repariert -> Dauer statt 'läuft noch', Defekte offen 0", "Defekte: 1 (offen: 0)" in txt and "Dauer unter 1 Min." in txt, txt)
+    check("Verlauf Demo: gleiches Material mit neuem Hinweis bleibt eine Wartezeit, der Hinweis wird nachgeführt", "Wartezeiten (Material oder Diesel): 1 (offen: 1)" in txt and "ca. 20 m\u00b3" in txt, txt)
+    check("Verlauf: keine Prozentzahlen", "%" not in hd.inner_text("#modal"))
+    hd.click("#modal >> text=Schliessen")
+    check("Verlauf: nach dem Schliessen ist das Fenster samt Inhalt weg (kein Speicher)", hd.locator("#modal").count() == 0 and hd.locator("#histBox").count() == 0)
+
+    HSEED = """(()=>{
+      const d = window.__db, T = Date.now(), M = 60000;
+      d.users['chef@firma.test'] = {id:'u1', email:'chef@firma.test', password:'x'};
+      d.profiles.push({id:'u1', email:'chef@firma.test', name:'Chef', role:'admin', approved:true});
+      d.session = {user:{id:'u1', email:'chef@firma.test'}};
+      d.sites.push({id:'a', name:'Testweg', sparte:'tief', lat:47.23, lng:8.83});
+      d.machines.push({id:'m1', name:'Bagger A', typ:'Bagger', sparte:'tief', site_id:'a', status:'broken', reason:''}, {id:'m2', name:'Walze B', typ:'Walze', sparte:'strasse', site_id:'a', status:'running', reason:''});
+      const R = (o) => d.downtimes.push(Object.assign({id:d.seq++, typ:'', site_name:'Testweg', reason:'', reported_name:'Chef', ended_at:null}, o));
+      const iso = ms => new Date(ms).toISOString();
+      R({machine_id:'m1', machine_name:'Bagger A', kind:'broken', started_at:iso(T-180*M), ended_at:iso(T-60*M)});
+      R({machine_id:'m2', machine_name:'Walze B', kind:'waiting', reason:'Material fehlt: Kies 0/32', started_at:iso(T-90*M), ended_at:iso(T-60*M)});
+      R({machine_id:'m1', machine_name:'Bagger A', kind:'broken', started_at:iso(T-45*M)});
+      R({machine_id:'m2', machine_name:'Walze B', kind:'broken', started_at:iso(T-40*1440*M), ended_at:iso(T-40*1440*M+60*M)});
+      R({machine_id:null, machine_name:'Alter Dumper', site_name:'Park', kind:'broken', started_at:iso(T-600*M), ended_at:iso(T-300*M)});
+      R({machine_id:null, machine_name:'<img src=x onerror="window.__xss=1">', kind:'broken', reported_name:'<b>Hack</b>', started_at:iso(T-20*M), ended_at:iso(T-10*M)});
+    })();"""
+    hm = new_page(b, True, 390, 800); hm.add_init_script(HSEED); hm.goto(URL + "?modus=leicht"); hm.wait_for_timeout(800)
+    hm.click("#historyBtn"); hm.wait_for_timeout(300)
+    ht = hm.inner_text("#histBox")
+    check("Verlauf Live: Handy ohne seitliches Scrollen, Knopf gross genug", not hm.evaluate("document.documentElement.scrollWidth > window.innerWidth") and hm.evaluate("document.querySelector('#historyBtn').getBoundingClientRect().height") >= 30)
+    check("Verlauf Live: Zahlen für 30 Tage (4 Defekte, einer offen, 1 Wartezeit; der 40 Tage alte fehlt)", "Defekte: 4 (offen: 1)" in ht and "Wartezeiten (Material oder Diesel): 1 (offen: 0) · Dauer zusammen: 30 Min." in ht, ht)
+    check("Verlauf Live: Dauer eines geschlossenen Defekts wird richtig berechnet (2 Std.)", "Dauer 2 Std." in ht and "Dauer 5 Std." in ht, ht)
+    check("Verlauf Live: offener Eintrag zeigt 'läuft noch seit' mit sinnvoller Dauer (um 45 Min.)", any(("läuft noch seit %d Min." % n) in ht for n in (44, 45, 46)), ht)
+    check("Verlauf Live: Wartezeit zeigt Material, Absender kommt aus der Datenbank", "Material fehlt: Kies 0/32" in ht and "gemeldet von Chef" in ht)
+    check("Verlauf Live: je Maschine, längste Dauer zuerst (gelöschte Maschine nach Name, Alter Dumper vor Bagger A vor Walze B)", ht.index("Alter Dumper") < ht.index("Bagger A") < ht.index("Walze B"), ht)
+    check("Verlauf Live: Fremdtext nur als Text (kein Bild, kein Skript)", hm.evaluate("window.__xss") is None and hm.locator("#histBox img").count() == 0 and "<img src=x" in ht and "<b>Hack</b>" in ht)
+    check("Verlauf Live: Handy-Ansicht ohne seitliches Scrollen auch mit Daten", not hm.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth + 1"))
+    hm.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_verlauf_handy.png"))
+    hm.select_option("#h-range", "90"); hm.wait_for_timeout(300)
+    check("Verlauf Live: Zeitraum 90 Tage nimmt den älteren Eintrag dazu", "Defekte: 5 (offen: 1)" in hm.inner_text("#histBox"), hm.inner_text("#histBox"))
+    check("Verlauf Live: Seite schreibt nie in die Tabelle (nur lesen)", len(hm.evaluate("window.__db.downtimes")) == 6)
+    hm.click("#modal >> text=Schliessen")
+    hm.evaluate("window.__db.failNext = {table:'downtimes', msg:'relation \"public.downtimes\" does not exist'}")
+    hm.click("#historyBtn"); hm.wait_for_timeout(300)
+    check("Verlauf Live: fehlt die Tabelle, steht ein Hinweis zum Datenbank-Update statt einer leeren Seite", "Datenbank-Update" in hm.inner_text("#histBox") and hm.locator("#histBox .hrow").count() == 0, hm.inner_text("#histBox"))
+    hm.click("#modal >> text=Schliessen")
+    # Die Datenbank schreibt mit: Meldung und Reparatur ueber die Seite
+    hm.evaluate("setMachine(machines.find(m => m.id === 'm2'), { status:'waiting', reason:'Diesel fehlt' }, 'x')"); hm.wait_for_timeout(300)
+    hm.evaluate("setMachine(machines.find(m => m.id === 'm2'), { status:'running', reason:'' }, 'x')"); hm.wait_for_timeout(300)
+    n_dt = [d for d in hm.evaluate("window.__db.downtimes") if d["machine_id"] == "m2" and d["reason"] == "Diesel fehlt"]
+    check("Verlauf Live: Melden und Beheben ueber die Seite ergibt genau einen geschlossenen Eintrag (schreibt die Datenbank)", len(n_dt) == 1 and n_dt[0]["ended_at"] is not None and n_dt[0]["reported_name"] == "Chef", str(n_dt))
+    # Viele Eintraege: nur 500 geladen, 40 gezeigt, Rest auf Wunsch
+    hm.evaluate("(()=>{const d=window.__db, T=Date.now(); for(let i=0;i<520;i++) d.downtimes.push({id:d.seq++, machine_id:'m1', machine_name:'Bagger A', typ:'', site_name:'Testweg', kind:'broken', reason:'', reported_name:'Chef', started_at:new Date(T-(i+100)*60000).toISOString(), ended_at:new Date(T-(i+99)*60000).toISOString()});})()")
+    hm.click("#historyBtn"); hm.wait_for_timeout(400)
+    check("Verlauf Live: bei sehr vielen Eintraegen steht ehrlich, dass nur die neusten 500 gezeigt werden", "nur die neusten 500" in hm.inner_text("#histBox"))
+    check("Verlauf Live: zunächst nur 40 Zeilen im Dokument (wenig Speicher), 'Weitere anzeigen' zeigt 40 mehr", hm.locator("#histBox .hrow .hk").count() == 40 and hm.locator("#histBox >> text=Weitere anzeigen").count() == 1)
+    hm.click("#histBox >> text=Weitere anzeigen")
+    check("Verlauf Live: nach 'Weitere anzeigen' sind es 80", hm.locator("#histBox .hrow .hk").count() == 80)
+    hm.click("#modal >> text=Schliessen")
 
     # ============================================================ PASSWORT VERGESSEN
     print("=== PASSWORT VERGESSEN ===")

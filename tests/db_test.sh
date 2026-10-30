@@ -228,6 +228,64 @@ expect "Material: Schreiber löscht sein eigenes Material" "$MAT" "$out"
 out=$(as_user $U1 "delete from public.materials where name='Humus siebfein' returning name;")
 expect "Material: Admin löscht fremdes Material" "Humus siebfein" "$out"
 
+# ---------------------------------------------------------------- Störungsverlauf
+echo
+echo "=== Störungsverlauf (downtimes) ==="
+VS=$($P -c "select id from public.sites order by name limit 1")
+$P -c "insert into public.machines(name,typ,sparte,status,site_id) values ('Verlaufsbagger','Bagger','tief','running','$VS')" >/dev/null
+VM=$($P -c "select id from public.machines where name='Verlaufsbagger'")
+dt () { $P -c "select $1 from public.downtimes where machine_name='Verlaufsbagger' $2"; }
+expect_eq "Verlauf: laufende Maschine hat keinen Eintrag" "0" "$(dt "count(*)")"
+as_user $U3 "update public.machines set status='broken', reason='' where id='$VM';" >/dev/null
+expect_eq "Verlauf: Defekt öffnet genau einen Eintrag (Art, Baustelle, Absender von der Datenbank)" "1|broken|ma|true" "$(dt "count(*)||'|'||min(kind)||'|'||min(reported_name)||'|'||bool_and(site_name = (select name from public.sites where id='$VS'))" "and ended_at is null")"
+expect_eq "Verlauf: Beginn ist jetzt, Ende ist offen" "true|true" "$(dt "(started_at > now() - interval '1 minute')||'|'||(ended_at is null)")"
+as_user $U1 "update public.machines set status='running', reason='' where id='$VM';" >/dev/null
+expect_eq "Verlauf: Repariert schliesst den Eintrag, es bleibt einer" "1|0" "$(dt "count(*)||'|'||count(*) filter (where ended_at is null)")"
+as_user $U3 "update public.machines set status='waiting', reason='Material fehlt: Kies 0/32' where id='$VM';" >/dev/null
+SA=$(dt "started_at" "and ended_at is null")
+as_user $U3 "update public.machines set reason='Material fehlt: Kies 0/32 · ca. 20 m³' where id='$VM';" >/dev/null
+expect_eq "Verlauf: nur der Hinweis ändert sich -> dieselbe Wartezeit, Beginn bleibt, Hinweis wird nachgeführt" "2|Material fehlt: Kies 0/32 · ca. 20 m³|true" "$(dt "count(*)||'|'||min(reason) filter (where ended_at is null)||'|'||(min(started_at) filter (where ended_at is null) = '$SA')")"
+as_user $U1 "update public.machines set name='Verlaufsbagger', site_id='$VS' where id='$VM';" >/dev/null
+expect_eq "Verlauf: Umbenennen oder Ort ändern macht keinen neuen Eintrag" "2" "$(dt "count(*)")"
+as_user $U3 "update public.machines set status='waiting', reason='Diesel fehlt' where id='$VM';" >/dev/null
+expect_eq "Verlauf: anderes Material oder Diesel schliesst die alte Wartezeit und öffnet eine neue" "3|1|Diesel fehlt" "$(dt "count(*)||'|'||count(*) filter (where ended_at is null)||'|'||min(reason) filter (where ended_at is null)")"
+expect_eq "Verlauf: Defekt mitten in einer Wartezeit wechselt die Art" "1" "$(as_user $U3 "update public.machines set status='broken', reason='' where id='$VM';" >/dev/null; dt "count(*)" "and ended_at is null and kind='broken'")"
+out=$($P -c "insert into public.downtimes(machine_id,machine_name,kind) values ('$VM','Doppelt','broken')" 2>&1 || true)
+expect "Verlauf: pro Maschine nur ein offener Eintrag (eindeutiger Index)" "duplicate key" "$out"
+
+# Lesen und Schreiben über die Zugriffsregeln
+out=$(as_user $U3 "select count(*) > 0 from public.downtimes;")
+expect_eq "Verlauf: freigegebener Mitarbeiter darf lesen" "t" "$(echo "$out" | tail -1)"
+out=$(as_user $U2 "select count(*) from public.downtimes;")
+expect_eq "Verlauf: nicht freigegebene Person sieht nichts" "0" "$(echo "$out" | tail -1)"
+out=$(as_anon "select count(*) from public.downtimes;")
+expect "Verlauf: nicht angemeldet kein Zugriff" "permission denied" "$out"
+for U in $U3 $U1; do
+  out=$(as_user $U "insert into public.downtimes(machine_name,kind) values ('Gefälscht','broken');")
+  expect "Verlauf: Einfügen von Hand verboten (auch Admin)" "permission denied" "$out"
+  out=$(as_user $U "update public.downtimes set ended_at = now(), machine_name='Hack' where machine_name='Verlaufsbagger';")
+  expect "Verlauf: Ändern von Hand verboten (auch Admin)" "permission denied" "$out"
+  out=$(as_user $U "delete from public.downtimes where machine_name='Verlaufsbagger';")
+  expect "Verlauf: Löschen von Hand verboten (auch Admin)" "permission denied" "$out"
+done
+expect_eq "Verlauf: der Verlauf ist unverändert" "4" "$(dt "count(*)")"
+
+# Maschine löschen: offene Störung wird abgeschlossen, Name bleibt lesbar
+as_user $U1 "delete from public.machines where id='$VM';" >/dev/null
+expect_eq "Verlauf: Maschine gelöscht -> Eintrag geschlossen, Verbindung leer, Name bleibt" "4|0|4" "$(dt "count(*)||'|'||count(*) filter (where ended_at is null)||'|'||count(*) filter (where machine_id is null)")"
+$P -c "insert into public.machines(name,typ,sparte,status,site_id) values ('Gleich defekt','LKW','strasse','broken','$VS')" >/dev/null
+expect_eq "Verlauf: neue Maschine, die schon defekt angelegt wird, bekommt einen offenen Eintrag" "1" "$($P -c "select count(*) from public.downtimes where machine_name='Gleich defekt' and ended_at is null and kind='broken'")"
+
+# Erstes Ausführen auf einer Datenbank, in der schon Maschinen gestört sind
+$P -c "alter table public.machines disable trigger downtimes_trg" >/dev/null
+$P -c "insert into public.machines(name,typ,sparte,status,reason,site_id) values ('Vorher schon kaputt','Walze','strasse','broken','','$VS')" >/dev/null
+$P -c "alter table public.machines enable trigger downtimes_trg" >/dev/null
+expect_eq "Verlauf: Maschine ohne Eintrag (Trigger war aus)" "0" "$($P -c "select count(*) from public.downtimes where machine_name='Vorher schon kaputt'")"
+$P -f "$ROOT/supabase/schema.sql" >/dev/null 2>&1
+$P -f "$ROOT/supabase/schema.sql" >/dev/null 2>&1
+expect_eq "Verlauf: schema.sql holt den offenen Eintrag nach, und nur einmal (auch nach zweitem Lauf)" "1" "$($P -c "select count(*) from public.downtimes where machine_name='Vorher schon kaputt' and ended_at is null")"
+expect_eq "Verlauf: offene Einträge stimmen genau mit den gestörten Maschinen überein" "t" "$($P -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
+
 # ---------------------------------------------------------------- Update einer bestehenden (alten) Datenbank
 echo
 echo "=== Update einer alten Datenbank (mit Prozent-Spalten) ==="
@@ -241,6 +299,7 @@ out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "erro
 expect_not "Update: neues schema.sql läuft ohne Fehler über die alte Datenbank" "ERROR" "$out"
 expect_eq "Update: Tabelle needs ist da" "t" "$($PA -c "select to_regclass('public.needs') is not null")"
 expect_eq "Update: Tabelle materials ist da" "t" "$($PA -c "select to_regclass('public.materials') is not null")"
+expect_eq "Update: Tabelle downtimes ist da, offene Einträge stimmen mit den gestörten Maschinen überein" "t" "$($PA -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
 expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"
 expect_eq "Update: alte Daten sind unverändert" "5 Baustellen, 13 Maschinen" "$($PA -c "select (select count(*) from sites)||' Baustellen, '||(select count(*) from machines)||' Maschinen'")"
 out=$($PA -c "insert into public.sites(name,sparte,lat,lng) values ('Ohne Prozent','tief',47.2,8.8) returning name;" 2>&1)

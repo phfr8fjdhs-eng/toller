@@ -330,8 +330,86 @@ drop policy if exists activity_insert on public.activity;
 create policy activity_insert on public.activity
   for insert to authenticated with check (public.is_approved());
 
+-- ---------------------------------------------------------------- Störungsverlauf
+-- Jede Störung (Defekt) und jede Wartezeit (Material oder Diesel fehlt) wird von der Datenbank mitgeschrieben:
+-- Beginn = Meldung, Ende = "Repariert", "Nachgeliefert", "Getankt" oder Maschine gelöscht. Niemand schreibt von Hand hinein,
+-- auch Admins nicht (kein Schönfärben). Name, Art und Baustelle stehen als Kopie dabei, damit der Verlauf nach dem Umbenennen
+-- oder Löschen einer Maschine lesbar bleibt. Die Zeiten zeigen die Dauer der Meldung, nicht eine Messung an der Maschine.
+create table if not exists public.downtimes (
+  id             bigint generated always as identity primary key,
+  machine_id     uuid references public.machines(id) on delete set null,
+  machine_name   text not null,
+  typ            text not null default '',
+  site_name      text not null default '',
+  kind           text not null check (kind in ('broken', 'waiting')),
+  reason         text not null default '',
+  reported_name  text not null default '',
+  started_at     timestamptz not null default now(),
+  ended_at       timestamptz
+);
+create unique index if not exists downtimes_open_uq on public.downtimes(machine_id) where ended_at is null;
+create index if not exists downtimes_started_idx on public.downtimes(started_at desc);
+
+create or replace function public.downtimes_track()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  site_n text := '';
+begin
+  if tg_op = 'DELETE' then                                   -- vor dem Löschen: offene Störung abschliessen
+    update public.downtimes set ended_at = now() where machine_id = old.id and ended_at is null;
+    return old;
+  end if;
+  if tg_op = 'UPDATE' then
+    if new.status is not distinct from old.status and new.reason is not distinct from old.reason then
+      return new;                                            -- nichts Neues (Umbenennen, Ort wechseln, ...)
+    end if;
+    -- gleiche Art und gleiches Material, nur anderer Hinweis ("· ca. 20 m³"): dieselbe Störung, nicht eine neue
+    if new.status in ('waiting', 'broken') and new.status = old.status
+       and split_part(new.reason, ' · ', 1) = split_part(old.reason, ' · ', 1) then
+      update public.downtimes set reason = new.reason where machine_id = new.id and ended_at is null;
+      return new;
+    end if;
+  end if;
+  update public.downtimes set ended_at = now() where machine_id = new.id and ended_at is null;
+  if new.status in ('waiting', 'broken') then
+    select coalesce(name, '') into site_n from public.sites where id = new.site_id;
+    insert into public.downtimes(machine_id, machine_name, typ, site_name, kind, reason, reported_name)
+    values (new.id, new.name, new.typ, coalesce(site_n, ''), new.status, new.reason, new.reported_name);
+  end if;
+  return new;
+end;
+$$;
+
+-- AFTER, damit der Absender schon vom Trigger machines_stamp gesetzt ist. Beim Löschen BEFORE, sonst setzt die
+-- Fremdschlüssel-Regel machine_id vorher auf leer und die offene Störung bliebe offen.
+drop trigger if exists downtimes_trg on public.machines;
+create trigger downtimes_trg
+  after insert or update on public.machines
+  for each row execute function public.downtimes_track();
+drop trigger if exists downtimes_del_trg on public.machines;
+create trigger downtimes_del_trg
+  before delete on public.machines
+  for each row execute function public.downtimes_track();
+
+-- Beim ersten Ausführen: Maschinen, die jetzt schon gestört sind oder warten, bekommen einen offenen Eintrag
+insert into public.downtimes(machine_id, machine_name, typ, site_name, kind, reason, reported_name, started_at)
+select m.id, m.name, m.typ, coalesce(s.name, ''), m.status, m.reason, m.reported_name, coalesce(m.reported_at, now())
+from public.machines m left join public.sites s on s.id = m.site_id
+where m.status in ('waiting', 'broken')
+  and not exists (select 1 from public.downtimes d where d.machine_id = m.id and d.ended_at is null);
+
+alter table public.downtimes enable row level security;
+drop policy if exists downtimes_select on public.downtimes;
+create policy downtimes_select on public.downtimes
+  for select to authenticated using (public.is_approved());
+-- Keine Regel zum Schreiben, Ändern oder Löschen, und zusätzlich entzogen: nur der Trigger schreibt
+revoke insert, update, delete, truncate on public.downtimes from anon, authenticated;
+
 -- Nicht angemeldete Besucher bekommen gar keinen Zugriff
-revoke all on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity from anon;
+revoke all on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity, public.downtimes from anon;
 revoke execute on function public.is_approved(), public.is_admin() from anon;
 
 -- ---------------------------------------------------------------- Echtzeit

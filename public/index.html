@@ -121,6 +121,13 @@
   .offer{border:1px solid var(--line);border-radius:8px;padding:0 10px}
   .offer summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:14px}
   .offer .form{padding-bottom:10px}
+  .hsum{font-size:14px;padding:6px 0}
+  .hrow{border-top:1px solid var(--line);padding:8px 0;font-size:14px}
+  .hrow .t{font-size:12px;color:var(--muted);margin-top:2px}
+  .hk{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#0b0f14;background:var(--off)}
+  .hk.broken{background:var(--bad)}
+  .hk.waiting{background:var(--wait)}
+  #histBox>button{margin-top:8px;min-height:44px;width:100%}
   .offer p{margin:8px 0 0;font-size:13px;line-height:1.4}
   .offer button{min-height:44px}
   .offneed{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center;min-height:44px}
@@ -203,6 +210,7 @@
   <div class="btns">
     <button id="addSiteBtn" class="primary">+ Baustelle</button>
     <button id="addMachineBtn">+ Maschine</button>
+    <button id="historyBtn" title="Verlauf der Störungen und Wartezeiten">Verlauf</button>
     <button id="modeBtn" title="Leicht: ohne Karte und 3D, spart Arbeitsspeicher und Daten (für ältere Handys). 3D: Karte und 3D-Ansicht der Baustelle (für Computer)."></button>
     <button id="usersBtn" hidden>Benutzer</button>
     <button id="failBtn" hidden>Störung simulieren</button>
@@ -360,6 +368,7 @@ let needs = [];        // Bedarf: { id, site, text, author, createdBy, createdAt
 let needsOk = true;    // false, wenn die Datenbank noch keine Tabelle needs hat (schema.sql erneut ausführen)
 let customMats = [];   // eigene Materialien der Mitarbeiter (zusätzlich zum Katalog): { id, name, by, createdBy }
 let matsOk = true;     // false, wenn die Datenbank noch keine Tabelle materials hat (Katalog und freie Eingabe gehen trotzdem)
+let demoDowntimes = []; // nur Demo: Verlauf der Störungen dieser Sitzung (Live: Tabelle downtimes, wird erst beim Öffnen geladen)
 let selected = null;
 const filter = new Set();      // gewählte Sparten, leer = alle (Mehrfachauswahl)
 let incidents = 0;
@@ -498,6 +507,7 @@ function setMachine(m, patch, logText){
   const old = m.status, before = { status:m.status, reason:m.reason };
   Object.assign(m, patch);
   stampLocal(m, before);
+  trackDemo(m, before);
   if(old !== "broken" && m.status === "broken") onBreak();
   if(logText) addLog(logText);
   render();
@@ -648,6 +658,7 @@ async function createMachine(v){
 
 async function deleteMachine(m){
   machines = machines.filter(x => x.id !== m.id);
+  if(!LIVE) demoDowntimes.forEach(d => { if(d.machineId === m.id){ if(!d.end) d.end = Date.now(); d.machineId = null; } });
   addLog(m.name + " gelöscht"); render();
   if(LIVE){
     const r = await sb.from("machines").delete().eq("id", m.id);
@@ -1831,6 +1842,115 @@ async function searchAddress(q){
     .map(r => ({ label:String(r.attrs.label || "").replace(/<[^>]*>/g, ""), lat:r.attrs.lat, lng:r.attrs.lon }));
 }
 
+/* =============================================================== Verlauf der Störungen und Wartezeiten
+   Live: Tabelle downtimes. Sie wird nur vom Datenbank-Trigger geschrieben, niemand schreibt von Hand hinein, auch kein Admin.
+   Demo: eine lokale Liste dieser Sitzung. Geladen wird erst beim Öffnen des Fensters, höchstens 500 Einträge,
+   nach dem Schliessen bleibt nichts im Speicher. Keine Prozentzahlen: Anzahl und Dauer sind echte Zählungen. */
+const HIST_MAX = 500;
+function trackDemo(m, before){            // wie der Trigger downtimes_track, nur für die Demo
+  if(LIVE || (m.status === before.status && m.reason === before.reason)) return;
+  const bad = x => x === "waiting" || x === "broken";
+  const open = demoDowntimes.find(d => d.machineId === m.id && !d.end);
+  if(open && bad(m.status) && m.status === before.status && matKey(m.reason) === matKey(before.reason)){ open.reason = m.reason; return; }
+  if(open) open.end = Date.now();
+  if(bad(m.status)){
+    const st = findSite(m.site);
+    demoDowntimes.push({ id:++localId, machineId:m.id, name:m.name, typ:m.typ, site:st ? st.name : "", kind:m.status, reason:m.reason || "", by:m.by || "Demo", start:Date.now(), end:null });
+    if(demoDowntimes.length > 300) demoDowntimes.shift();
+  }
+}
+const mapDowntime = r => ({ id:r.id, machineId:r.machine_id, name:r.machine_name || "", typ:r.typ || "", site:r.site_name || "", kind:r.kind, reason:r.reason || "", by:r.reported_name || "",
+  start:new Date(r.started_at).getTime(), end:r.ended_at ? new Date(r.ended_at).getTime() : null });
+function fmtDur(ms){
+  const min = Math.round(ms / 60000);
+  if(min < 1) return "unter 1 Min.";
+  if(min < 60) return min + " Min.";
+  const h = Math.floor(min / 60), mm = min % 60;
+  if(h < 24) return h + " Std." + (mm ? " " + mm + " Min." : "");
+  const d = Math.floor(h / 24), hh = h % 24;
+  return d + " Tg." + (hh ? " " + hh + " Std." : "");
+}
+
+function histRow(r, now){
+  const row = el("div", "hrow");
+  const top = el("div");
+  top.appendChild(el("span", "hk " + r.kind, r.kind === "broken" ? "Defekt" : "wartet"));      // Text, nicht nur Farbe
+  top.appendChild(document.createTextNode(" " + r.name + (r.site ? " · " + r.site : "")));
+  row.appendChild(top);
+  row.appendChild(el("div", "t", (r.kind === "waiting" && r.reason ? r.reason + " · " : "") + "Beginn " + needTime(r.start) + " · " +
+    (r.end ? "Dauer " + fmtDur(r.end - r.start) : "läuft noch seit " + fmtDur(now - r.start)) + (r.by ? " · gemeldet von " + r.by : "")));
+  return row;
+}
+
+function drawHistory(box, rows, capped){
+  box.innerHTML = "";
+  const note = el("p", "muted", "Beginn ist die Meldung, Ende ist \"Repariert\", \"Nachgeliefert\" oder \"Getankt\". Die Zeiten zeigen, wie lange eine Meldung offen war, nicht eine Messung an der Maschine. Maschinen, bei denen niemand etwas gemeldet hat, erscheinen hier nicht." + (LIVE ? "" : " Demo: nur Meldungen dieser Sitzung."));
+  if(!rows.length){ box.appendChild(el("div", "empty", "In diesem Zeitraum wurde keine Störung und keine Wartezeit gemeldet.")); box.appendChild(note); return; }
+  const now = Date.now(), dur = r => (r.end || now) - r.start;
+  if(capped) box.appendChild(el("div", "msg err", "Gezeigt werden nur die neusten " + HIST_MAX + " Einträge. Für ein vollständiges Bild einen kürzeren Zeitraum wählen."));
+  [["broken", "Defekte"], ["waiting", "Wartezeiten (Material oder Diesel)"]].forEach(k=>{
+    const l = rows.filter(r => r.kind === k[0]);
+    box.appendChild(el("div", "hsum", k[1] + ": " + l.length + " (offen: " + l.filter(r => !r.end).length + ") · Dauer zusammen: " + (l.length ? fmtDur(l.reduce((a, r) => a + dur(r), 0)) : "–")));
+  });
+
+  const per = new Map();                                                       // je Maschine; Zeilen sind neueste zuerst, die erste gibt den Namen
+  rows.forEach(r=>{
+    const key = r.machineId || ("n:" + r.name);
+    const p = per.get(key) || { name:r.name, b:0, bt:0, w:0, wt:0 };
+    if(r.kind === "broken"){ p.b++; p.bt += dur(r); } else { p.w++; p.wt += dur(r); }
+    per.set(key, p);
+  });
+  const top = Array.from(per.values()).sort((a, b) => (b.bt + b.wt) - (a.bt + a.wt)).slice(0, 15);
+  box.appendChild(el("div", "sub", "Nach Maschine (längste Dauer zuerst)"));
+  top.forEach(p=>{
+    const row = el("div", "hrow"); row.appendChild(el("div", "", p.name));
+    row.appendChild(el("div", "t", [p.b ? "Defekt " + p.b + "× · " + fmtDur(p.bt) : "", p.w ? "wartet " + p.w + "× · " + fmtDur(p.wt) : ""].filter(Boolean).join("   |   ")));
+    box.appendChild(row);
+  });
+  if(per.size > top.length) box.appendChild(el("div", "empty", "… und " + (per.size - top.length) + " weitere Maschinen"));
+
+  box.appendChild(el("div", "sub", "Einträge (neueste zuerst)"));
+  const listBox = el("div"); box.appendChild(listBox);
+  const more = el("button", "", "Weitere anzeigen"); more.type = "button";
+  let shown = 0;
+  const addMore = ()=>{
+    rows.slice(shown, shown + 40).forEach(r => listBox.appendChild(histRow(r, now)));
+    shown = Math.min(rows.length, shown + 40); more.hidden = shown >= rows.length;
+  };
+  more.onclick = addMore; addMore(); box.appendChild(more);
+  box.appendChild(note);
+}
+
+function modalHistory(){
+  const body = el("div");
+  const range = select([["30", "Letzte 30 Tage"], ["90", "Letzte 90 Tage"], ["365", "Letztes Jahr"]], "30", "h-range");
+  body.appendChild(field("Zeitraum", range));
+  const box = el("div"); box.id = "histBox"; body.appendChild(box);
+  let seq = 0;
+  const load = async ()=>{
+    const my = ++seq;
+    box.innerHTML = ""; box.appendChild(el("div", "empty", "Lade …"));
+    const since = Date.now() - Number(range.value) * 864e5;
+    let rows;
+    if(!LIVE) rows = demoDowntimes.filter(r => r.start >= since).sort((a, b) => b.start - a.start);
+    else{
+      const r = await sb.from("downtimes").select("*").gte("started_at", new Date(since).toISOString()).order("started_at", { ascending:false }).limit(HIST_MAX);
+      if(my !== seq || !box.isConnected) return;                                // anderer Zeitraum gewählt oder Fenster zu
+      if(r.error){
+        box.innerHTML = "";
+        box.appendChild(el("div", "msg err", /downtimes|does not exist|schema cache/i.test(r.error.message) ? "Der Verlauf braucht ein Datenbank-Update: schema.sql im Supabase SQL Editor noch einmal ausführen." : "Laden fehlgeschlagen: " + r.error.message));
+        return;
+      }
+      rows = r.data.map(mapDowntime);
+    }
+    if(my !== seq || !box.isConnected) return;
+    drawHistory(box, rows, LIVE && rows.length >= HIST_MAX);
+  };
+  range.onchange = load;
+  openModal("Verlauf der Störungen", body, true);
+  load();
+}
+
 /* ---------- Beschreibung / Offerte -> Vorschlag für eine neue Baustelle ----------
    Reiner Text, keine Bibliothek, wird erst beim Tipp auf "Vorschlag erstellen" gebraucht. Nichts wird gespeichert,
    ausser was der Admin danach auswählt. Preise, Summen und Kundendaten werden nicht übernommen. Nur ein Vorschlag. */
@@ -2311,6 +2431,7 @@ function tick(){
     else if(r < 0.008) setMachine(m, { status:"waiting", reason:"Diesel fehlt" }, m.name + ": Diesel fehlt" + where(m));
     else return;
     m.by = "Simulation";                      // die Vorführung meldet selbst, das soll man sehen
+    const od = demoDowntimes.find(d => d.machineId === m.id && !d.end); if(od) od.by = "Simulation";
   });
   softRender();
 }
@@ -2354,6 +2475,7 @@ function initMode(){
 $("btnOverview").onclick = ()=>showOverview();
 $("addSiteBtn").onclick = ()=>modalSite();
 $("addMachineBtn").onclick = ()=>modalMachine();
+$("historyBtn").onclick = modalHistory;
 $("pickCancel").onclick = ()=>{ pickCb = null; $("pickBar").hidden = true; $("map").classList.remove("picking"); modalSite(pickDraft || undefined); };
 
 // Solange ein Finger oder die Maus gedrückt ist, wird nicht automatisch neu gezeichnet.

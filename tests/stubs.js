@@ -62,7 +62,7 @@
   window.__mapClick = function(lat, lng){ (handlers.click || []).forEach(cb => cb({ lngLat:{ lat, lng } })); };
 
   // ---- Supabase
-  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };
+  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], downtimes:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };
   const nid = () => "id" + (db.seq++);
   const me = () => db.session ? db.profiles.find(p => p.id === db.session.user.id) : null;
   const approved = () => { const m = me(); return !!(m && m.approved); };
@@ -80,6 +80,22 @@
     else { r.reported_by = null; r.reported_name = ""; r.reported_at = null; }
   }
 
+  // Wie der Trigger downtimes_track: die Datenbank schreibt den Verlauf der Stoerungen, nie die Seite
+  function track(nw, old, op){
+    const id = (nw || old).id, bad = x => x === "waiting" || x === "broken";
+    const open = () => db.downtimes.find(d => d.machine_id === id && !d.ended_at);
+    if(op === "delete"){ const o = open(); if(o) o.ended_at = new Date().toISOString(); db.downtimes.forEach(d => { if(d.machine_id === id) d.machine_id = null; }); return; }
+    if(op === "update"){
+      if(nw.status === old.status && nw.reason === old.reason) return;
+      if(bad(nw.status) && nw.status === old.status && String(nw.reason).split(" · ")[0] === String(old.reason).split(" · ")[0]){ const o = open(); if(o) o.reason = nw.reason; return; }
+    }
+    const o = open(); if(o) o.ended_at = new Date().toISOString();
+    if(bad(nw.status)){
+      const site = db.sites.find(x => x.id === nw.site_id);
+      db.downtimes.push({ id:db.seq++, machine_id:nw.id, machine_name:nw.name, typ:nw.typ || "", site_name:site ? site.name : "", kind:nw.status, reason:nw.reason || "", reported_name:nw.reported_name || "", started_at:new Date().toISOString(), ended_at:null });
+    }
+  }
+
   function Q(t){ this.t = t; this.op = "select"; this.fl = []; this.row = null; this.one = false; this.maybe = false; this.sel = false; this.ord = null; this.lim = null; }
   Q.prototype = {
     select(){ this.sel = true; return this; },
@@ -87,6 +103,7 @@
     update(r){ this.op = "update"; this.row = r; return this; },
     delete(){ this.op = "delete"; return this; },
     eq(k, v){ this.fl.push(r => r[k] === v); return this; },
+    gte(k, v){ this.fl.push(r => r[k] >= v); return this; },
     like(k, p){ const pre = p.replace("%", ""); this.fl.push(r => String(r[k]).indexOf(pre) === 0); return this; },
     order(k, o){ this.ord = [k, !(o && o.ascending === false)]; return this; },
     limit(n){ this.lim = n; return this; },
@@ -99,6 +116,7 @@
       const isProf = this.t === "profiles";
       const canRead = isProf ? (r => admin() || (me() && r.id === me().id)) : (() => approved());
       const rls = { message:"new row violates row-level security policy" };
+      if(this.t === "downtimes" && this.op !== "select") return { data:null, error:{ message:"permission denied for table downtimes" } };   // nur der Trigger schreibt
       let rows = T.filter(r => canRead(r) && this.fl.every(f => f(r)));
       if(this.op === "insert"){
         if(isProf || !approved()) return { data:null, error:rls };
@@ -114,19 +132,19 @@
           if(this.t === "machines") stamp(row, null);
           made.push(row);
         }
-        made.forEach(row => { T.push(row); emit(this.t, "INSERT", row); });
+        made.forEach(row => { T.push(row); if(this.t === "machines") track(row, null, "insert"); emit(this.t, "INSERT", row); });
         return this.sel ? { data:this.one ? made[0] : made, error:null } : { data:null, error:null };
       }
       if(this.op === "update"){
         if(isProf ? !admin() : !approved()) return { data:[], error:null };
         if(this.t === "materials") return { data:[], error:null };           // Materialien lassen sich nicht aendern
-        rows.forEach(r => { const old = Object.assign({}, r); Object.assign(r, this.row); if(this.t === "machines") stamp(r, old); emit(this.t, "UPDATE", r, old); });
+        rows.forEach(r => { const old = Object.assign({}, r); Object.assign(r, this.row); if(this.t === "machines"){ stamp(r, old); track(r, old, "update"); } emit(this.t, "UPDATE", r, old); });
         return { data:rows, error:null };
       }
       if(this.op === "delete"){
         if(this.t === "needs" || this.t === "materials") rows = rows.filter(r => admin() || r.created_by === (me() || {}).id);   // Schreiber oder Admin
         else if(!admin()) return { data:[], error:null };
-        rows.forEach(r => { T.splice(T.indexOf(r), 1); emit(this.t, "DELETE", null, { id:r.id }); });
+        rows.forEach(r => { if(this.t === "machines") track(null, r, "delete"); T.splice(T.indexOf(r), 1); emit(this.t, "DELETE", null, { id:r.id }); });
         return { data:rows, error:null };
       }
       if(this.ord) rows = rows.slice().sort((a, b) => (a[this.ord[0]] > b[this.ord[0]] ? 1 : -1) * (this.ord[1] ? 1 : -1));

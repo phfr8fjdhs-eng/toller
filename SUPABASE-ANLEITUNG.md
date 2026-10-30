@@ -84,6 +84,8 @@ alter table public.machines drop column if exists tank;
 | Eigenes Material in der Auswahl ergänzen | nein | ja | ja |
 | Eigenes Material löschen | nein | nur eigenes | ja |
 | Sehen, wer eine Meldung abgeschickt hat | nein | ja | ja |
+| Verlauf der Störungen ansehen | nein | ja | ja |
+| Verlauf ändern oder löschen | nein | nein | nein (nur die Datenbank schreibt ihn) |
 | Baustellen und Maschinen löschen | nein | nein | ja |
 | Benutzer freigeben und sperren | nein | nein | ja |
 

@@ -20,7 +20,7 @@ results = []
 def check(name, ok, extra=""):
     results.append((name, bool(ok))); print(("OK    " if ok else "FEHLER"), name, extra)
 
-def measure(b, mode, n_sites, per_site, n_needs):
+def measure(b, mode, n_sites, per_site, n_needs, history=False):
     ctx = b.new_context(viewport={"width": 390, "height": 800})
     pg = ctx.new_page()
     reqs = []
@@ -53,13 +53,27 @@ def measure(b, mode, n_sites, per_site, n_needs):
         "heavy_requests": [u for u in reqs if "maplibre" in u or "three" in u],
         "map_loaded": pg.evaluate("typeof window.maplibregl !== 'undefined' && !!document.querySelector('#lmap .lm')") if mode == "leicht" else None,
     }
+    if history:      # Verlauf mit 600 Eintraegen oeffnen und wieder schliessen: Seitenelemente zaehlen
+        pg.evaluate("""() => { const d = window.__db, T = Date.now(); for(let i = 0; i < 600; i++) d.downtimes.push({id:d.seq++, machine_id:'m'+(i%50)+'_0', machine_name:'Maschine '+(i%50)+'-0', typ:'Bagger', site_name:'Baustelle '+(i%50)+' Musterweg', kind:i%3?'broken':'waiting', reason:i%3?'':'Diesel fehlt', reported_name:'Chef', started_at:new Date(T-(i+10)*3600000).toISOString(), ended_at:new Date(T-(i+9)*3600000).toISOString()}); }""")
+        def nodes():    # erst Speicher bereinigen, sonst zählen abgelegte, noch nicht freigegebene Elemente mit
+            cdp.send("HeapProfiler.collectGarbage"); cdp.send("HeapProfiler.collectGarbage")
+            return int({x["name"]: x["value"] for x in cdp.send("Performance.getMetrics")["metrics"]}["Nodes"])
+        info["nodes_before_hist"] = nodes(); info["dom_before_hist"] = pg.evaluate("document.querySelectorAll('*').length")
+        pg.click("#historyBtn"); pg.wait_for_timeout(500)
+        info["nodes_hist_open"] = nodes(); info["hist_dom"] = pg.evaluate("document.querySelectorAll('#modal *').length"); info["hist_rows"] = pg.locator("#histBox .hrow .hk").count()
+        pg.click("#modal >> text=Schliessen"); pg.wait_for_timeout(200)
+        info["nodes_hist_closed"] = nodes()
+        info["dom_after_close"] = pg.evaluate("document.querySelectorAll('*').length")
+        for _ in range(2):         # zweimal öffnen und schliessen: es darf nichts wachsen
+            pg.click("#historyBtn"); pg.wait_for_timeout(400); pg.click("#modal >> text=Schliessen"); pg.wait_for_timeout(200)
+        info["nodes_hist_closed3"] = nodes()
     ctx.close()
     return info
 
 with sync_playwright() as p:
     b = p.chromium.launch(args=["--js-flags=--expose-gc"])
     klein = measure(b, "leicht", 5, 3, 5)
-    gross = measure(b, "leicht", SITES, PER_SITE, NEEDS)
+    gross = measure(b, "leicht", SITES, PER_SITE, NEEDS, history=True)
     d3 = measure(b, "3d", SITES, PER_SITE, NEEDS)
     b.close()
 
@@ -74,6 +88,11 @@ check("Leicht: höchstens %d Seitenelemente" % LIMITS["nodes"], gross["nodes"] <
 check("Leicht: Szenen werden erst beim Hinscrollen gezeichnet (nicht für alle %d Baustellen)" % SITES, gross["scenes"] < SITES / 2, "%d Szenen" % gross["scenes"])
 check("Leicht: die Liste zeigt trotzdem alle Baustellen", gross["sites"] == SITES, str(gross["sites"]))
 check("Leicht hat deutlich weniger Seitenelemente als 3D (Karten-Marker mit Szenen entfallen)", gross["nodes"] < d3["nodes"] * 0.6, "%d gegen %d" % (gross["nodes"], d3["nodes"]))
+check("Verlauf: lädt höchstens 500 Einträge, zeigt davon nur 40 Zeilen", gross["hist_rows"] == 40, str(gross["hist_rows"]))
+check("Verlauf: das offene Fenster hat höchstens 700 Seitenelemente", gross["hist_dom"] < 700, "%d Elemente im Fenster, insgesamt %d zusätzlich" % (gross["hist_dom"], gross["nodes_hist_open"] - gross["nodes_before_hist"]))
+check("Verlauf: nach dem Schliessen sind die Seitenelemente wieder wie vorher", gross["dom_after_close"] == gross["dom_before_hist"], "%d vorher, %d nachher" % (gross["dom_before_hist"], gross["dom_after_close"]))
+check("Verlauf: nach dem ersten Öffnen bleibt höchstens ein kleiner einmaliger Rest (unter 150 Knoten)", gross["nodes_hist_closed"] - gross["nodes_before_hist"] < 150, "%d Knoten Rest" % (gross["nodes_hist_closed"] - gross["nodes_before_hist"]))
+check("Verlauf: wiederholtes Öffnen und Schliessen lässt nichts wachsen (kein Leck)", gross["nodes_hist_closed3"] <= gross["nodes_hist_closed"] + 10, "%d nach 1x, %d nach 3x" % (gross["nodes_hist_closed"], gross["nodes_hist_closed3"]))
 bad = [n for n, ok in results if not ok]
 print("Ergebnis: %d von %d Pruefungen bestanden" % (len(results) - len(bad), len(results)))
 if bad: print("Nicht bestanden:", bad); raise SystemExit(1)
