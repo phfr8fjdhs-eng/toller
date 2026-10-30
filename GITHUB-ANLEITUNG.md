@@ -117,7 +117,7 @@ Wichtig: Prüfe vor der Wahl die Preise und Nutzungsbedingungen. Manche Gratis-S
 - Die Seite zeigt eine schlanke 3D-Karte mit MapLibre. Den Kartenstil liefert OpenFreeMap (ohne Schlüssel), die Höhendaten kommen von AWS Terrain Tiles. Dafür braucht sie Internet, sonst erscheint die Skizze.
 - Die Karte ist absichtlich einfach gehalten (kein 3D-Gebäude-Modell), damit sie auf Handys flüssig läuft. Mit dem Knopf "3D" schaltest du auf eine flache Ansicht.
 - Prüfe vor dem Firmenbetrieb die Nutzungsbedingungen von OpenFreeMap (openfreemap.org/tos). Alternativen sind swisstopo (für die Schweiz) oder ein bezahlter Kartenanbieter.
-- Die echten Positionen der Baustellen stehen als `lat` und `lng` in `index.html`. Später können sie aus den Adressen berechnet werden.
+- Die echten Positionen der Baustellen stehen als `lat` und `lng` in `public/index.html`. Später können sie aus den Adressen berechnet werden.
 
 ## Reihenfolge (Vorschlag)
 1. GitHub einrichten und Repo hochladen (Schritte 1 bis 3 oben)

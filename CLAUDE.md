@@ -14,7 +14,7 @@ und was fehlt (Material oder Diesel).
 - **Maschine:** Bagger, Walze, Fertiger, Dumper, LKW, Radlader usw.
 
 ## Technik
-- Reines HTML, CSS und JavaScript in `index.html` (keine Installation nötig)
+- Reines HTML, CSS und JavaScript in `public/index.html` (keine Installation nötig)
 - Daten sind jetzt simuliert, später kommen echte Daten über `applyData(list)` rein
 - Echte 3D-Karte: MapLibre GL JS (von unpkg) mit dem Stil "positron" von OpenFreeMap (kein Schlüssel nötig) und Höhendaten von AWS Terrain Tiles. Ohne Internet bleibt die Skizze als Ersatz
 - Gebiet: Rapperswil-Jona und Umgebung. Die Karte muss auf Handys flüssig laufen, darum bewusst schlank (kein 3D-Gebäude-Modell, Schalter "3D" für 2D-Ansicht)
@@ -39,7 +39,8 @@ und was fehlt (Material oder Diesel).
 - Vor größeren Änderungen erst einen Plan zeigen
 
 ## Befehle
-- Starten: `index.html` im Browser öffnen
+- Starten: `public/index.html` im Browser öffnen
+- Veröffentlichung: Netlify veröffentlicht nur den Ordner `public` (siehe `netlify.toml`). Nur Dateien, die jeder sehen darf, gehören dort hinein. `CLAUDE.md`, Anleitungen und `.claude` bleiben ausserhalb.
 
 ## Aufgaben für später
 - Gemeinsamer Datenspeicher mit Echtzeit, damit alle Handys denselben Stand sehen (z. B. Supabase, noch zu entscheiden)

@@ -5,7 +5,7 @@ description: Anleitung, um eine neue Baustelle ins Baustellen-Dashboard einzubau
 
 # Neue Baustelle einbauen
 
-1. Öffne `index.html` und suche die Liste `sites`.
+1. Öffne `public/index.html` und suche die Liste `sites`.
 2. Füge einen neuen Eintrag hinzu:
    - `id`: neue, eindeutige Id (z. B. `"s6"`)
    - `name`: Name der Baustelle

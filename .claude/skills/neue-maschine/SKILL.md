@@ -5,7 +5,7 @@ description: Anleitung, um eine neue Maschine ins Baustellen-Dashboard einzubaue
 
 # Neue Maschine einbauen
 
-1. Öffne `index.html` und suche die Liste `machines`.
+1. Öffne `public/index.html` und suche die Liste `machines`.
 2. Füge einen neuen Eintrag hinzu:
    - `id`: nächste freie Nummer
    - `name`: kurzer, klarer Name (z. B. "Bagger 3")

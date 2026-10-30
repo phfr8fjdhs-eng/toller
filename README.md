@@ -5,9 +5,9 @@ mit ihren Maschinen. Jede Maschine hat einen Status, bei Störung gibt es Alarm.
 Aktuell sind alle Daten **simuliert** (Prototyp).
 
 ## Ausprobieren
-Öffne `index.html` im Browser. Mit Internet erscheint eine **schlanke 3D-Karte von Rapperswil-Jona und Umgebung** (MapLibre, OpenFreeMap), ohne Internet eine Skizze.
+Öffne `public/index.html` im Browser. Mit Internet erscheint eine **schlanke 3D-Karte von Rapperswil-Jona und Umgebung** (MapLibre, OpenFreeMap), ohne Internet eine Skizze.
 Mit den Knöpfen links oben schaltest du 3D ein und aus oder gehst zurück zur Übersicht. Zwei Finger drehen und kippen die Karte.
-Die Positionen der Baustellen sind Beispielwerte (`lat` und `lng` in `index.html`).
+Die Positionen der Baustellen sind Beispielwerte (`lat` und `lng` in `public/index.html`).
 Klicke auf "Ton an", damit der Alarm hörbar ist.
 
 - Klick auf eine Baustelle: rechts siehst du ihre Maschinen
@@ -17,7 +17,7 @@ Klicke auf "Ton an", damit der Alarm hörbar ist.
 - Oben filterst du nach Sparte
 
 ## Ordner
-- `index.html`: der ganze Prototyp
+- `public/index.html`: der ganze Prototyp
 - `GITHUB-ANLEITUNG.md`: was du bei GitHub machst, was Claude Code macht, und wie die Seite für mehrere Handys online geht
 - `CLAUDE.md`: das Gedächtnis des Projekts, Claude Code liest es bei jedem Start
 - `.claude/agents/tester.md`: Spezialist, der Änderungen prüft
