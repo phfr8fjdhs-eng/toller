@@ -56,6 +56,24 @@ with sync_playwright() as p:
     d.click("#addSiteBtn"); d.click("text=Baustelle speichern")
     check("Demo: leeres Formular wird abgelehnt", "Bitte einen Namen" in d.inner_text("#modal"))
     d.click("#modal >> text=Schliessen")
+
+    # Baustellen-Szene (SVG)
+    check("Szene: jeder Marker hat eine Szene", d.locator("#lmap .lm .site .scene").count() == d.locator("#lmap .lm .site").count())
+    kanal = d.locator("#lmap .lm .site", has_text="Kanal Bahnhofstr.")
+    check("Szene: Kanal Bahnhofstr. zeigt 3 Maschinen", kanal.locator(".mach").count() == 3, str(kanal.locator(".mach").count()))
+    check("Szene: Werkhof zeigt seine Maschinen gedimmt", d.locator("#lmap .lm .site.depot .mach.off").count() == 3)
+    check("Szene: Stoerung -> eine Maschine blinkt rot", d.locator("#lmap .lm .site .mach.broken").count() >= 1 and d.locator("#lmap .lm .site .mach.broken").count() == d.locator("#lmap .lm .site .mach.broken .stc.broken").count())
+    d.evaluate("""(()=>{
+      for(let i=0;i<7;i++) machines.push({id:'x'+i,name:'Extra '+i,typ:'Dumper',sparte:'garten',site:'s1',status:'running',tank:80,reason:''});
+      machines.push({id:'xw',name:'Wartend',typ:'Mäher',sparte:'garten',site:'s1',status:'waiting',tank:80,reason:'Material fehlt'});
+      render();
+    })()""")
+    birke = d.locator("#lmap .lm .site", has_text="Birkenweg")
+    check("Szene: mehr als 5 Maschinen -> 4 gezeichnet plus Zaehler", birke.locator(".mach").count() == 4 and "+" in birke.locator(".scene text").text_content(), birke.locator(".scene text").text_content())
+    check("Szene: wartende Maschine bleibt sichtbar (Schlechteste zuerst)", birke.locator(".mach.waiting").count() >= 1)
+    check("Szene: Zaehler zeigt echte Restzahl", birke.locator(".scene text").text_content() == "+" + str(d.evaluate("machines.filter(m=>m.site==='s1').length - 4")))
+    d.evaluate("""(()=>{ machines.filter(m=>m.site==='s1').forEach(m=>{ m.site=null; m.status='off'; }); render(); })()""")
+    check("Szene: ohne Maschinen keine Silhouetten", d.locator("#lmap .lm .site", has_text="Birkenweg").locator(".mach").count() == 0)
     d.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_demo.png"), full_page=False)
 
     # ============================================================ LIVE
