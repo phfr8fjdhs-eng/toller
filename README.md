@@ -8,7 +8,7 @@ Ohne Einrichtung läuft die Seite im **Demo-Modus** mit erfundenen Daten. Mit Su
 Öffne `public/index.html` im Browser. Mit Internet erscheint eine **schlanke 3D-Karte von Rapperswil-Jona und Umgebung** (MapLibre, OpenFreeMap), ohne Internet eine Skizze.
 Mit den Knöpfen links oben schaltest du 3D ein und aus oder gehst zurück zur Übersicht. Zwei Finger drehen und kippen die Karte.
 Im Demo-Modus sind die Positionen der Baustellen Beispielwerte.
-Klicke auf "Ton an", damit der Alarm hörbar ist.
+Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst keinen Ton.
 
 - Klick auf eine Baustelle: rechts siehst du ihre Maschinen
 - Defekte Maschine: "Reparieren"

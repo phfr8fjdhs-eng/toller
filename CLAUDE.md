@@ -2,8 +2,8 @@
 
 ## Was wird gebaut
 Ein **echtes Dashboard für eine Firma, die Gartenbau, Strassenbau und Tiefbau zusammen macht**.
-Aufgebaut wie ein Spiel: Karte von oben, Baustellen als Marker, Maschinen mit Status,
-Alarm bei Störung, Lebensleiste für die Einsatzbereitschaft.
+Sachlich aufgebaut, kein Spiel: Karte, Baustellen als Marker, Maschinen mit Status,
+Alarm bei Störung (Banner und Blinken), Einsatzbereitschaft als Kennzahl.
 Man sieht sofort: wo wird gearbeitet, welche Maschine läuft, wartet oder ist kaputt,
 und was fehlt (Material oder Diesel).
 Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
@@ -35,13 +35,13 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Status-Farben immer gleich: grün = läuft, gelb = wartet (Material oder Diesel fehlt), rot blinkend = kaputt, grau = im Werkhof
 - Sparten nie mit Status-Farben markieren: Sparte nur als Buchstaben-Tag (G, S, T)
 - Eine Baustelle zeigt immer den schlechtesten Status ihrer Maschinen
-- Warnton nur einmal pro neuer Störung (Wechsel auf `broken`), nicht dauerhaft. Auch bei Störungen von anderen Handys
+- **Kein Ton, nie.** Eine neue Störung (Wechsel auf `broken`) wird einmal gezählt und als Banner und rot blinkende Maschine gezeigt, auch bei Störungen von anderen Handys
 - Sicherheit liegt in der Datenbank (Row Level Security in `schema.sql`), nicht in der Seite. Die Seite blendet nur Knöpfe aus. Jede Änderung an Tabellen braucht passende Regeln und einen Test
 - Der `anon`-Key darf in `config.js` stehen. Den `service_role`-Key und Passwörter nie in Code, Chat oder Repo (gehören in `.env`, die in `.gitignore` steht)
 - Texte aus Benutzereingaben nur mit `textContent` anzeigen, nie mit `innerHTML`
 - Automatisches Neuzeichnen (`softRender`) wartet, solange ein Finger gedrückt ist, sonst gehen Klicks verloren
 - Löschen mit Zwei-Schritt-Knopf (`confirmBtn`), nicht mit `confirm()`
-- Anzeige darf wie ein Spiel aussehen, die Zahlen müssen aber echt und ehrlich sein (kein Schönfärben)
+- Die Anzeige ist ein Arbeitswerkzeug einer Firma: sachlich, keine Spielelemente, und die Zahlen müssen echt und ehrlich sein (kein Schönfärben)
 - Handy zuerst: Bedienung mit dem Finger, grosse Buttons, auf kleinen Bildschirmen keine seitliche Scrollleiste
 - Schreibweise Schweiz: "Strassenbau" mit ss
 - Kleine Schritte: nach jeder fertigen Funktion ein Commit mit klarer Nachricht auf Deutsch
@@ -59,7 +59,7 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Erster Test gegen ein echtes Supabase-Projekt (Anmeldung, Freigabe, Echtzeit, Adresssuche)
 - **Excel-Anbindung (bewusst später):** Excel-Tabellen mit Baustellen, Maschinen und Status sollen automatisch eingelesen werden. Entscheidungen: Excel liefert auch den Status, Excel ist dann die Quelle der Wahrheit für seine Zeilen (Handy darf diese Status nicht ändern), im Dashboard angelegte Zeilen bleiben erhalten, der Sync fasst nur Excel-Zeilen an. Datei in SharePoint/OneDrive, Sync als zeitgesteuerte Funktion in der Cloud, Leserecht nur auf eine Datei über Microsoft Graph. Die IT muss die App-Registrierung anlegen. Vorher Beispieldatei ansehen
 - Passwort-vergessen-Knopf
-- Push-Nachrichten aufs Handy bei Störung (Ton im Browser geht nicht bei gesperrtem Handy)
+- Push-Nachrichten aufs Handy bei Störung (die Seite zeigt nur etwas, solange sie offen ist)
 - Kartenanbieter für den Firmenbetrieb festlegen (Bedingungen von OpenFreeMap prüfen, Alternativen: swisstopo oder bezahlter Anbieter)
 - Supabase-Plan und Datenschutz für den Firmenbetrieb klären (Region, Backups, Pausierung)
 - Mehr als 1000 Baustellen oder Maschinen: Abfragen in Seiten teilen

@@ -1,13 +1,8 @@
 // Ersatz fuer Supabase und MapLibre, nur fuer Tests
 (function(){
-  // ---- Audio zaehlen
-  window.__beeps = 0;
-  window.AudioContext = function(){
-    this.state = "running"; this.currentTime = 0; this.destination = {};
-    this.resume = function(){};
-    this.createOscillator = function(){ window.__beeps++; return { type:"", frequency:{}, connect(){}, start(){}, stop(){} }; };
-    this.createGain = function(){ return { gain:{ setValueAtTime(){}, exponentialRampToValueAtTime(){} }, connect(){} }; };
-  };
+  // ---- Audio: die Seite darf nie einen Ton erzeugen (es gibt keinen Alarmton)
+  window.__audio = 0;
+  window.AudioContext = window.webkitAudioContext = function(){ window.__audio++; };
 
   // ---- MapLibre
   const handlers = {};

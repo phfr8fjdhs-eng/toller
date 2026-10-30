@@ -173,7 +173,6 @@
     <button id="addSiteBtn" class="primary">+ Baustelle</button>
     <button id="addMachineBtn">+ Maschine</button>
     <button id="usersBtn" hidden>Benutzer</button>
-    <button id="soundBtn">Ton aus</button>
     <button id="failBtn" hidden>Störung simulieren</button>
     <span id="userChip" class="muted" hidden></span>
     <button id="logoutBtn" hidden>Abmelden</button>
@@ -264,8 +263,6 @@ let machines = [];     // { id, name, typ, sparte, site (Baustellen-Id oder null
 let selected = null;
 let filter = "all";
 let incidents = 0;
-let soundOn = true;
-let audioCtx = null;
 let pressing = false, pressStart = 0;
 let localId = 0;
 const logs = [];
@@ -347,27 +344,6 @@ function toast(msg, isErr){
   toastTimer = setTimeout(()=>{ t.hidden = true; }, isErr ? 6000 : 3000);
 }
 
-function beep(){
-  if(!soundOn) return;
-  try{
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if(audioCtx.state === "suspended") audioCtx.resume();
-    [0, 0.3].forEach(t=>{
-      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.type = "square"; o.frequency.value = 880;
-      g.gain.setValueAtTime(0.0001, audioCtx.currentTime + t);
-      g.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime + t + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + t + 0.22);
-      o.connect(g); g.connect(audioCtx.destination);
-      o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.25);
-    });
-  }catch(e){}
-}
-// Handys erlauben Ton erst nach der ersten Berührung
-document.addEventListener("pointerdown", ()=>{
-  try{ if(audioCtx && audioCtx.state === "suspended") audioCtx.resume(); }catch(e){}
-}, true);
-
 function pushLog(text, ts, id){
   if(id !== undefined && id !== null){
     if(seenLog.has(id)) return;
@@ -384,7 +360,7 @@ async function addLog(text){
 }
 
 /* =============================================================== Daten: Änderungen */
-function onBreak(){ incidents++; beep(); }   // nur einmal pro neuer Störung
+function onBreak(){ incidents++; }   // zählt jede neue Störung einmal (Wechsel auf "broken"), auch von anderen Handys
 
 async function dbMachine(m, patch){
   const row = {};
@@ -1386,11 +1362,6 @@ function tick(){
 }
 
 /* =============================================================== Start */
-$("soundBtn").onclick = e=>{
-  soundOn = !soundOn;
-  e.target.textContent = soundOn ? "Ton aus" : "Ton an";
-  if(soundOn) beep();
-};
 $("failBtn").onclick = ()=>{
   const ok = machines.filter(m => m.site && m.status === "running" && showSparte(m.sparte));
   if(ok.length){ const m = ok[Math.floor(Math.random() * ok.length)]; setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m)); }

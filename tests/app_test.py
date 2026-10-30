@@ -42,7 +42,8 @@ with sync_playwright() as p:
     d.fill("#siteSearch", "")
     d.click("#failBtn")
     check("Demo: Stoerung -> Banner", d.locator("#banner.show").count() == 1)
-    check("Demo: Ton einmal (2 Toene)", d.evaluate("window.__beeps") == 2, str(d.evaluate("window.__beeps")))
+    check("Demo: Stoerung wird einmal gezaehlt", d.evaluate("incidents") == 1, str(d.evaluate("incidents")))
+    check("Demo: kein Ton-Knopf und kein Audio", d.locator("#soundBtn").count() == 0 and d.evaluate("window.__audio") == 0)
     d.click("#addSiteBtn")
     d.fill("#f-name", "Testbaustelle"); d.select_option("#f-sparte", "garten"); d.fill("#f-mat", "Humus")
     d.fill("#f-lat", "47.24"); d.fill("#f-lng", "8.83")
@@ -130,11 +131,11 @@ with sync_playwright() as p:
     check("Live: Maschine gespeichert, laeuft auf Baustelle", len(mach) == 1 and mach[0]["status"] == "running" and mach[0]["site_id"] is not None)
 
     # Stoerung melden
-    b0 = pg.evaluate("window.__beeps")
+    b0 = pg.evaluate("incidents")
     pg.click("#detail >> text=Defekt"); pg.wait_for_timeout(300)
     check("Live: Stoerung in Datenbank", pg.evaluate("window.__db.machines[0].status") == "broken")
     check("Live: Banner", pg.locator("#banner.show").count() == 1)
-    check("Live: Ton genau einmal (Echo aus Echtzeit loest nicht doppelt aus)", pg.evaluate("window.__beeps") - b0 == 2, str(pg.evaluate("window.__beeps") - b0))
+    check("Live: Stoerung genau einmal gezaehlt (Echo aus Echtzeit zaehlt nicht doppelt)", pg.evaluate("incidents") - b0 == 1, str(pg.evaluate("incidents") - b0))
     check("Live: Protokoll in Datenbank mit Name", any("Bagger A ausgefallen" in a["text"] and "Chef" in a["text"] for a in pg.evaluate("window.__db.activity")))
     pg.click("#detail >> text=Repariert"); pg.wait_for_timeout(300)
     check("Live: Repariert", pg.evaluate("window.__db.machines[0].status") == "running")
@@ -153,11 +154,11 @@ with sync_playwright() as p:
     check("Live: Knopf 'Nachgeliefert (100%)' gibt wartende Maschine frei", pg.evaluate("window.__db.machines[0].status") == "running" and pg.evaluate("window.__db.sites.find(s=>s.name=='Kanal Jona').material_level") == 100)
 
     # Stoerung von einem anderen Handy (Echtzeit)
-    b1 = pg.evaluate("window.__beeps")
+    b1 = pg.evaluate("incidents")
     pg.evaluate("(()=>{const m=window.__db.machines[0];const old=Object.assign({},m);m.status='broken';window.__db.emit('machines','UPDATE',m,old);})()")
     pg.wait_for_timeout(300)
     check("Live: fremde Stoerung zeigt Banner", pg.locator("#banner.show").count() == 1)
-    check("Live: fremde Stoerung loest Ton aus", pg.evaluate("window.__beeps") - b1 == 2)
+    check("Live: fremde Stoerung wird gezaehlt, ohne Ton", pg.evaluate("incidents") - b1 == 1 and pg.evaluate("window.__audio") == 0)
     pg.evaluate("(()=>{const m=window.__db.machines[0];const old=Object.assign({},m);m.status='running';window.__db.emit('machines','UPDATE',m,old);})()")
     # Neue Baustelle von einem anderen Handy erscheint
     pg.evaluate("(()=>{const r={id:'remote1',name:'Fremde Baustelle',sparte:'strasse',material_name:'Asphalt',material_level:50,lat:47.3,lng:8.9};window.__db.sites.push(r);window.__db.emit('sites','INSERT',r);})()")

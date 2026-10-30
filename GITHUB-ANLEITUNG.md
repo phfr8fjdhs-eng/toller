@@ -108,7 +108,7 @@ Wichtig: Prüfe vor der Wahl die Preise und Nutzungsbedingungen. Manche Gratis-S
 - Schlüssel kommen in eine Datei `.env`, die nicht ins Repo gehört (steht in `.gitignore`). Nie in den Chat oder in den Code kopieren.
 
 ## Besonderheiten bei Handys
-- **Ton:** Im Handy-Browser spielt der Alarm nur, nachdem jemand einmal getippt hat, und nicht bei gesperrtem Bildschirm. Für echte Alarme braucht es **Push-Nachrichten**. Auf dem iPhone funktioniert das nur, wenn die Seite zum Home-Bildschirm hinzugefügt wurde.
+- **Alarm:** Die Seite zeigt Störungen nur, solange sie offen ist (Banner und blinkende Maschine, ohne Ton). Bei gesperrtem Bildschirm kommt nichts an. Dafür braucht es **Push-Nachrichten**. Auf dem iPhone funktioniert das nur, wenn die Seite zum Home-Bildschirm hinzugefügt wurde.
 - **Bedienung:** Grosse Buttons, Liste statt freier Karte auf kleinen Bildschirmen (im Prototyp schon eingebaut).
 - **Rechte:** Entscheide, wer nur ansehen und wer Status ändern darf (zum Beispiel Bauführer, Disponent, Chef). Sonst kann jeder alles verändern.
 - **Gleichzeitige Änderungen:** Wenn zwei Personen dieselbe Maschine ändern, gilt der letzte Stand. Das sollte vorher festgelegt werden.
