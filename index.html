@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baustellen-Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a222c; --line:#2a3542; --text:#e6edf3; --muted:#8b98a5;
+    --ok:#2ea043; --wait:#d4a72c; --bad:#f85149; --off:#6e7681; --sel:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+  header{display:flex;flex-wrap:wrap;gap:12px 18px;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;margin:0}
+  .counts,.filters,.btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chip{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 11px;font-size:13px}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--off);flex:none;display:inline-block}
+  .dot.running{background:var(--ok)}
+  .dot.waiting{background:var(--wait)}
+  .dot.broken{background:var(--bad)}
+  .dot.off{background:var(--off)}
+  button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--muted)}
+  button.active{border-color:var(--sel);color:#fff}
+  .hud{display:flex;align-items:center;gap:10px;font-size:13px}
+  .hudbar{width:160px;height:14px;background:#0b0f14;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .hudbar i{display:block;height:100%;width:100%;background:var(--ok);transition:width .4s,background .4s}
+  .muted{color:var(--muted)}
+  #banner{display:none;background:var(--bad);color:#fff;padding:10px 16px;font-weight:600}
+  #banner.show{display:block;animation:pulse 1s infinite}
+  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+
+  #map{position:relative;aspect-ratio:16/10;min-height:460px;border:2px solid var(--line);border-radius:12px;background:#121a22;overflow:hidden}
+  #map svg{position:absolute;inset:0;width:100%;height:100%}
+  #sites{position:absolute;inset:0}
+  .site{position:absolute;transform:translate(-50%,-50%);width:150px;background:var(--panel);border:2px solid var(--off);border-radius:10px;padding:8px;cursor:pointer;user-select:none}
+  .site.running{border-color:var(--ok)}
+  .site.waiting{border-color:var(--wait)}
+  .site.broken{border-color:var(--bad);animation:blink .8s infinite}
+  .site.off{border-color:var(--off)}
+  .site.depot{border-style:dashed}
+  .site.dim{opacity:.25}
+  .site.sel{outline:3px solid var(--sel)}
+  .top{display:flex;align-items:center;gap:6px;min-width:0}
+  .top .nm{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tag{font-size:11px;font-weight:700;background:#2b3644;border-radius:5px;padding:1px 6px;color:#cfd8e3;flex:none}
+  .dots{display:flex;gap:4px;flex-wrap:wrap;margin:7px 0 6px;min-height:10px}
+  .mat{font-size:11px;color:var(--muted);margin-bottom:3px}
+  .bar{height:6px;background:#0b0f14;border-radius:3px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--ok)}
+  .bar.low i{background:var(--wait)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:16px}
+  .panel h2{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  .dhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .mrow{display:flex;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13px}
+  .mtxt{flex:1;min-width:0}
+  .mname{font-weight:600}
+  .mrow button{padding:4px 8px;font-size:12px}
+  .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  .sub{margin:12px 0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .avail{display:flex;gap:6px;flex-wrap:wrap}
+  .item{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line);font-size:13px;cursor:pointer}
+  .item:first-of-type{border-top:0}
+  .item .dot{margin-top:4px}
+  .empty{color:var(--muted);font-size:13px}
+  .log{font-size:12px;color:var(--muted);padding:3px 0}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  #lmap{position:absolute;inset:0;display:none;background:#121a22}
+  #map.real{aspect-ratio:auto;height:560px;min-height:0}
+  #map.real #lmap{display:block}
+  #map.real svg,#map.real #sites{display:none}
+  .lm{background:none;border:0}
+  .lm .site{position:static;transform:none;width:150px;left:auto!important;top:auto!important}
+  #lmap .maplibregl-canvas{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.95) saturate(.7)}
+  .maplibregl-ctrl-attrib{font-size:10px}
+  .mapbtns{position:absolute;left:10px;top:10px;z-index:5;display:none;gap:6px}
+  #map.real .mapbtns{display:flex}
+  @media(max-width:600px){
+    header{gap:10px}
+    .hudbar{width:110px}
+    #map{aspect-ratio:auto;min-height:0;padding:10px}
+    #map svg{display:none}
+    #sites{position:static;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .site{position:static;transform:none;width:auto}
+    .mrow button,.avail button{padding:9px 12px}
+  }
+  @keyframes blink{50%{background:#3a1a1c}}
+  @keyframes pulse{50%{opacity:.75}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Baustellen-Dashboard</h1>
+  <div class="counts" id="counts"></div>
+  <div class="hud" title="Anteil der Maschinen im Einsatz, die laufen (ohne Werkhof)">
+    <span id="hudText">Einsatzbereitschaft</span>
+    <div class="hudbar"><i id="hudFill"></i></div>
+    <span id="incidents" class="muted">Störungen: 0</span>
+  </div>
+  <div class="filters" id="filters">
+    <button data-f="all" class="active">Alle</button>
+    <button data-f="garten">Gartenbau</button>
+    <button data-f="strasse">Strassenbau</button>
+    <button data-f="tief">Tiefbau</button>
+  </div>
+  <div class="btns">
+    <button id="soundBtn">Ton aus</button>
+    <button id="failBtn">Störung simulieren</button>
+  </div>
+</header>
+<div id="banner" role="alert"></div>
+<main>
+  <section>
+    <div id="map">
+      <div id="lmap"></div>
+      <div class="mapbtns">
+        <button id="btn3d" class="active">3D</button>
+        <button id="btnOverview">Übersicht</button>
+      </div>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 42 C 25 36, 45 58, 100 34" fill="none" stroke="#243140" stroke-width="3" vector-effect="non-scaling-stroke"/>
+        <path d="M30 100 C 35 70, 55 60, 60 0" fill="none" stroke="#243140" stroke-width="2" vector-effect="non-scaling-stroke"/>
+        <path d="M70 0 C 66 30, 90 62, 78 100" fill="none" stroke="#1b3a52" stroke-width="5" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div id="sites"></div>
+    </div>
+    <div class="legend">
+      <span class="chip"><span class="dot running"></span>Läuft</span>
+      <span class="chip"><span class="dot waiting"></span>Wartet (Material / Diesel fehlt)</span>
+      <span class="chip"><span class="dot broken"></span>Defekt</span>
+      <span class="chip"><span class="dot off"></span>Im Werkhof</span>
+      <span class="chip"><span class="tag">G</span><span class="tag">S</span><span class="tag">T</span>Garten / Strasse / Tief</span>
+    </div>
+  </section>
+  <aside>
+    <div class="panel"><h2>Baustelle</h2><div id="detail"></div></div>
+    <div class="panel"><h2>Probleme</h2><div id="problems"></div></div>
+    <div class="panel"><h2>Protokoll</h2><div id="log"></div></div>
+  </aside>
+</main>
+
+<script>
+const SPARTEN = { garten:"Gartenbau", strasse:"Strassenbau", tief:"Tiefbau" };
+const TAG = { garten:"G", strasse:"S", tief:"T" };
+const LABEL = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Im Werkhof" };
+const SHORT = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Werkhof" };
+
+// x, y = Position auf der Skizze (Prozent). lat, lng = echte Position auf der Karte (Beispielwerte).
+const DEPOT = { id:"depot", name:"Werkhof", sparte:null, x:62, y:84, lat:47.2340, lng:8.8600 };
+
+const sites = [
+  { id:"s1", name:"Birkenweg",         sparte:"garten",  material:{ name:"Humus",   level:80 }, x:16, y:24, lat:47.2300, lng:8.8420 },
+  { id:"s2", name:"Umfahrung Nord",    sparte:"strasse", material:{ name:"Asphalt", level:70 }, x:55, y:18, lat:47.2560, lng:8.8480 },
+  { id:"s3", name:"Kanal Bahnhofstr.", sparte:"tief",    material:{ name:"Kies",    level:60 }, x:38, y:52, lat:47.2258, lng:8.8212 },
+  { id:"s4", name:"Park Seeblick",     sparte:"garten",  material:{ name:"Pflanzen",level:45 }, x:82, y:46, lat:47.2335, lng:8.8185 },
+  { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse", material:{ name:"Beton",   level:90 }, x:18, y:76, lat:47.2406, lng:8.9221 }
+];
+
+const machines = [
+  { id:1,  name:"Bagger 1",     typ:"Bagger",       sparte:"tief",    site:"s3", status:"running", tank:80,  reason:"" },
+  { id:2,  name:"Minibagger 1", typ:"Minibagger",   sparte:"tief",    site:"s3", status:"running", tank:60,  reason:"" },
+  { id:3,  name:"Dumper 1",     typ:"Dumper",       sparte:"tief",    site:"s3", status:"running", tank:90,  reason:"" },
+  { id:4,  name:"Walze 1",      typ:"Walze",        sparte:"strasse", site:"s2", status:"running", tank:70,  reason:"" },
+  { id:5,  name:"Fertiger 1",   typ:"Fertiger",     sparte:"strasse", site:"s2", status:"running", tank:85,  reason:"" },
+  { id:6,  name:"LKW 1",        typ:"LKW",          sparte:"strasse", site:"s2", status:"running", tank:50,  reason:"" },
+  { id:7,  name:"Radlader 1",   typ:"Radlader",     sparte:"strasse", site:"s5", status:"running", tank:75,  reason:"" },
+  { id:8,  name:"Rüttelplatte", typ:"Rüttelplatte", sparte:"strasse", site:"s5", status:"running", tank:65,  reason:"" },
+  { id:9,  name:"Minibagger 2", typ:"Minibagger",   sparte:"garten",  site:"s1", status:"running", tank:80,  reason:"" },
+  { id:10, name:"Dumper 2",     typ:"Dumper",       sparte:"garten",  site:"s1", status:"running", tank:55,  reason:"" },
+  { id:11, name:"Radlader 2",   typ:"Radlader",     sparte:"garten",  site:"s4", status:"running", tank:90,  reason:"" },
+  { id:12, name:"Aufsitzmäher", typ:"Mäher",        sparte:"garten",  site:"s4", status:"running", tank:70,  reason:"" },
+  { id:13, name:"Bagger 2",     typ:"Bagger",       sparte:"tief",    site:null, status:"off",     tank:100, reason:"" },
+  { id:14, name:"LKW 2",        typ:"LKW",          sparte:"strasse", site:null, status:"off",     tank:100, reason:"" },
+  { id:15, name:"Teleskoplader",typ:"Teleskoplader",sparte:"garten",  site:null, status:"off",     tank:100, reason:"" }
+];
+
+let soundOn = true;
+let audioCtx = null;
+let selected = "s3";
+let filter = "all";
+let incidents = 0;
+let pressing = false, pressStart = 0;
+const logs = [];
+
+/* ---------- Hilfen ---------- */
+function el(tag, cls, text){
+  const e = document.createElement(tag);
+  if(cls) e.className = cls;
+  if(text !== undefined) e.textContent = text;
+  return e;
+}
+const loc = m => m.site || "depot";
+const siteOf = m => sites.find(s => s.id === m.site) || null;
+const showSparte = sp => filter === "all" || sp === filter;
+
+function siteStatus(s){
+  const ms = machines.filter(m => m.site === s.id);
+  if(ms.some(m => m.status === "broken")) return "broken";
+  if(s.material.level <= 15 || ms.some(m => m.status === "waiting")) return "waiting";
+  if(ms.some(m => m.status === "running")) return "running";
+  return "off";
+}
+
+function beep(){
+  if(!soundOn) return;
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.3].forEach(t=>{
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "square"; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + t + 0.22);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.25);
+    });
+  }catch(e){}
+}
+
+function addLog(text){
+  const t = new Date().toLocaleTimeString("de-CH",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  logs.unshift(t + "  " + text);
+  if(logs.length > 8) logs.pop();
+}
+
+function setStatus(m, status, reason){
+  if(m.status === status) return;
+  m.status = status;
+  m.reason = status === "waiting" ? (reason || "") : "";
+  const s = siteOf(m);
+  const where = s ? " (" + s.name + ")" : "";
+  if(status === "broken"){
+    incidents++;
+    addLog(m.name + " ausgefallen" + where);
+    beep();                       // nur einmal pro neuer Störung
+  } else if(status === "waiting"){
+    addLog(m.name + ": " + m.reason + where);
+  }
+}
+
+/* ---------- Simulation ---------- */
+function tick(){
+  sites.forEach(s=>{
+    const r = machines.filter(m => m.site === s.id && m.status === "running").length;
+    s.material.level = Math.max(0, s.material.level - r * (0.5 + Math.random() * 0.8));
+  });
+  machines.forEach(m=>{
+    if(m.status !== "running") return;
+    const s = siteOf(m);
+    m.tank = Math.max(0, m.tank - (1 + Math.random() * 2));
+    if(s && s.material.level <= 15) setStatus(m, "waiting", "Material fehlt: " + s.material.name);
+    else if(m.tank <= 15) setStatus(m, "waiting", "Diesel leer");
+    else if(Math.random() < 0.004) setStatus(m, "broken");
+  });
+  softRender();
+}
+
+/* ---------- Aktionen ---------- */
+function resolve(m){
+  if(m.status === "broken"){
+    m.status = "running"; m.reason = "";
+    addLog(m.name + " repariert");
+  } else if(m.status === "waiting"){
+    if(m.reason.indexOf("Material") === 0){
+      const s = siteOf(m);
+      if(s){
+        s.material.level = 100;
+        machines.forEach(x=>{
+          if(x.site === s.id && x.status === "waiting" && x.reason.indexOf("Material") === 0){
+            x.status = "running"; x.reason = "";
+          }
+        });
+        addLog(s.material.name + " nachgeliefert (" + s.name + ")");
+      }
+    } else {
+      m.tank = 100; m.status = "running"; m.reason = "";
+      addLog(m.name + " getankt");
+    }
+  }
+  render();
+}
+
+function moveTo(m, siteId){
+  if(siteId === "depot"){
+    m.site = null; m.status = "off"; m.reason = "";
+    addLog(m.name + " zurück im Werkhof");
+  } else {
+    const s = sites.find(x => x.id === siteId);
+    m.site = siteId; m.status = "running"; m.reason = "";
+    addLog(m.name + " im Einsatz: " + (s ? s.name : siteId));
+  }
+  render();
+}
+
+/* ---------- Anzeige ---------- */
+function marker(s, isDepot){
+  const ms = machines.filter(m => loc(m) === s.id);
+  const st = isDepot ? "off" : siteStatus(s);
+  const d = el("div", "site " + st + (isDepot ? " depot" : "") +
+    (selected === s.id ? " sel" : "") +
+    (!isDepot && !showSparte(s.sparte) ? " dim" : ""));
+  d.style.left = s.x + "%";
+  d.style.top = s.y + "%";
+
+  const top = el("div", "top");
+  if(s.sparte) top.appendChild(el("span", "tag", TAG[s.sparte]));
+  top.appendChild(el("span", "nm", s.name));
+  d.appendChild(top);
+
+  const dots = el("div", "dots");
+  ms.forEach(m => dots.appendChild(el("span", "dot " + m.status)));
+  d.appendChild(dots);
+
+  if(s.material){
+    const low = s.material.level <= 15;
+    d.appendChild(el("div", "mat", s.material.name + " " + Math.round(s.material.level) + "%" + (low ? " – fehlt!" : "")));
+    const bar = el("div", "bar" + (low ? " low" : ""));
+    const i = el("i");
+    i.style.width = Math.round(s.material.level) + "%";
+    bar.appendChild(i);
+    d.appendChild(bar);
+  } else {
+    d.appendChild(el("div", "mat", ms.length + " Maschinen"));
+  }
+  d.onclick = ()=>selectSite(s.id);
+  return d;
+}
+
+function renderDetail(){
+  const box = document.getElementById("detail");
+  box.innerHTML = "";
+  const s = selected === "depot" ? DEPOT : sites.find(x => x.id === selected);
+  if(!s){ box.appendChild(el("div", "empty", "Klicke auf eine Baustelle auf der Karte.")); return; }
+
+  const head = el("div", "dhead");
+  if(s.sparte) head.appendChild(el("span", "tag", TAG[s.sparte]));
+  head.appendChild(el("strong", "", s.name));
+  if(s.sparte) head.appendChild(el("span", "muted", SPARTEN[s.sparte]));
+  box.appendChild(head);
+
+  if(s.material){
+    const low = s.material.level <= 15;
+    box.appendChild(el("div", "muted", "Material: " + s.material.name + " " + Math.round(s.material.level) + "%"));
+    const bar = el("div", "bar" + (low ? " low" : ""));
+    const i = el("i");
+    i.style.width = Math.round(s.material.level) + "%";
+    bar.appendChild(i);
+    box.appendChild(bar);
+  }
+
+  const list = machines.filter(m => loc(m) === s.id);
+  if(!list.length) box.appendChild(el("div", "empty", "Keine Maschinen hier."));
+  list.forEach(m=>{
+    const r = el("div", "mrow");
+    r.appendChild(el("span", "dot " + m.status));
+    const t = el("div", "mtxt");
+    t.appendChild(el("div", "mname", m.name));
+    const state = m.status === "waiting" ? m.reason : LABEL[m.status];
+    t.appendChild(el("div", "muted", m.typ + " · " + state + " · Diesel " + Math.round(m.tank) + "%"));
+    r.appendChild(t);
+    const acts = el("div", "acts");
+    if(m.status === "broken"){
+      const b = el("button", "", "Reparieren"); b.onclick = ()=>resolve(m); acts.appendChild(b);
+    } else if(m.status === "waiting"){
+      const label = m.reason.indexOf("Material") === 0 ? "Nachliefern" : "Tanken";
+      const b = el("button", "", label); b.onclick = ()=>resolve(m); acts.appendChild(b);
+    }
+    if(m.site){
+      const b = el("button", "", "Zurück"); b.onclick = ()=>moveTo(m, "depot"); acts.appendChild(b);
+    }
+    r.appendChild(acts);
+    box.appendChild(r);
+  });
+
+  if(s.id !== "depot"){
+    const avail = machines.filter(m => !m.site);
+    box.appendChild(el("div", "sub", "Aus dem Werkhof einsetzen"));
+    if(!avail.length) box.appendChild(el("div", "empty", "Alle Maschinen sind im Einsatz."));
+    const wrap = el("div", "avail");
+    avail.forEach(m=>{
+      const b = el("button", "", "+ " + m.name);
+      b.onclick = ()=>moveTo(m, s.id);
+      wrap.appendChild(b);
+    });
+    box.appendChild(wrap);
+  } else {
+    box.appendChild(el("div", "sub", "Hinweis"));
+    box.appendChild(el("div", "empty", "Wähle eine Baustelle, um Maschinen aus dem Werkhof einzusetzen."));
+  }
+}
+
+// Automatisches Neuzeichnen (Takt, neue Daten) wartet, solange ein Finger oder die Maus gedrückt ist.
+// Sonst wird das Element unter dem Finger ersetzt und der Klick geht verloren.
+function softRender(){
+  if(pressing && Date.now() - pressStart < 4000) return;
+  render();
+}
+
+function render(){
+  // Karte
+  if(lmap){
+    syncRealMarkers();
+  } else {
+    const layer = document.getElementById("sites");
+    layer.innerHTML = "";
+    sites.forEach(s => layer.appendChild(marker(s, false)));
+    layer.appendChild(marker(DEPOT, true));
+  }
+
+  // Zähler und Lebensleiste (nur sichtbare Sparte)
+  const vm = machines.filter(m => showSparte(m.sparte));
+  const c = { running:0, waiting:0, broken:0, off:0 };
+  vm.forEach(m => c[m.status]++);
+  const counts = document.getElementById("counts");
+  counts.innerHTML = "";
+  ["running","waiting","broken","off"].forEach(k=>{
+    const chip = el("span", "chip");
+    chip.appendChild(el("span", "dot " + k));
+    chip.appendChild(el("span", "", SHORT[k] + ": " + c[k]));
+    counts.appendChild(chip);
+  });
+
+  const active = vm.length - c.off;
+  const health = active ? Math.round(100 * c.running / active) : 100;
+  const fill = document.getElementById("hudFill");
+  fill.style.width = health + "%";
+  fill.style.background = health >= 75 ? "var(--ok)" : health >= 40 ? "var(--wait)" : "var(--bad)";
+  document.getElementById("hudText").textContent = "Einsatzbereitschaft " + health + "%";
+  document.getElementById("incidents").textContent = "Störungen: " + incidents;
+
+  // Banner
+  const banner = document.getElementById("banner");
+  const bad = vm.filter(m => m.status === "broken");
+  if(bad.length){
+    banner.className = "show";
+    banner.textContent = "⚠ Störung: " + bad.map(m => {
+      const s = siteOf(m); return m.name + (s ? " (" + s.name + ")" : "");
+    }).join(", ");
+  } else banner.className = "";
+
+  // Probleme
+  const probs = vm.filter(m => m.status === "broken" || m.status === "waiting");
+  const pEl = document.getElementById("problems");
+  pEl.innerHTML = "";
+  if(!probs.length) pEl.appendChild(el("div", "empty", "Alles in Ordnung."));
+  probs.forEach(m=>{
+    const s = siteOf(m);
+    const i = el("div", "item");
+    i.appendChild(el("span", "dot " + m.status));
+    i.appendChild(el("span", "", m.name + (s ? " (" + s.name + ")" : "") + ": " +
+      (m.status === "broken" ? "defekt" : m.reason)));
+    i.onclick = ()=>selectSite(loc(m));
+    pEl.appendChild(i);
+  });
+
+  // Protokoll
+  const lEl = document.getElementById("log");
+  lEl.innerHTML = "";
+  if(!logs.length) lEl.appendChild(el("div", "empty", "Noch nichts passiert."));
+  logs.forEach(t => lEl.appendChild(el("div", "log", t)));
+
+  renderDetail();
+}
+
+/* ---------- Schnittstelle für echte Daten ---------- */
+// Später z. B. von einem Server aufrufen.
+// list = [{ id:1, status:"running", tank:80, site:"s3", reason:"" }, ...]
+function applyData(list){
+  list.forEach(d=>{
+    const m = machines.find(x => x.id === d.id);
+    if(!m) return;
+    if(typeof d.tank === "number") m.tank = d.tank;
+    if("site" in d) m.site = d.site;
+    if(d.status in LABEL) setStatus(m, d.status, d.reason || "");
+  });
+  softRender();
+}
+const USE_SIMULATION = true;   // false = nur echte Daten über applyData()
+
+/* ---------- Bedienung ---------- */
+document.getElementById("soundBtn").onclick = e=>{
+  soundOn = !soundOn;
+  e.target.textContent = soundOn ? "Ton aus" : "Ton an";
+  if(soundOn) beep();
+};
+document.getElementById("failBtn").onclick = ()=>{
+  const ok = machines.filter(m => m.site && m.status === "running" && showSparte(m.sparte));
+  if(ok.length) setStatus(ok[Math.floor(Math.random() * ok.length)], "broken");
+  render();
+};
+document.getElementById("filters").onclick = e=>{
+  const f = e.target.getAttribute("data-f");
+  if(!f) return;
+  filter = f;
+  document.querySelectorAll("#filters button").forEach(b => b.classList.toggle("active", b === e.target));
+  render();
+};
+
+/* ---------- Echte 3D-Karte (MapLibre + OpenFreeMap) ---------- */
+// Bewusst schlank für Handys: heller Minimal-Stil, keine 3D-Gebäude, Gelände nur als sanftes Relief.
+let lmap = null;
+let mapReady = false;
+let is3D = true;
+const lmarkers = {};
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+
+function fallbackToSketch(){
+  if(lmap){ try{ lmap.remove(); }catch(e){} }
+  lmap = null;
+  mapReady = false;
+  Object.keys(lmarkers).forEach(k => delete lmarkers[k]);
+  document.getElementById("lmap").innerHTML = "";
+  document.getElementById("map").classList.remove("real");
+  render();
+}
+
+function initRealMap(){
+  if(typeof maplibregl === "undefined") return;          // ohne Internet bleibt die Skizze
+  try{
+    document.getElementById("map").classList.add("real");
+    lmap = new maplibregl.Map({
+      container: "lmap",
+      style: MAP_STYLE,
+      center: [8.85, 47.235],
+      zoom: 11.5,
+      pitch: 55,
+      bearing: -15,
+      maxPitch: 70,
+      maxZoom: 17,
+      attributionControl: { compact: true }
+    });
+    lmap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+    lmap.on("load", ()=>{
+      if(!lmap) return;                // Karte wurde inzwischen verworfen
+      lmap.addSource("dem", {
+        type: "raster-dem",
+        tiles: [DEM_TILES],
+        encoding: "terrarium",
+        tileSize: 256,
+        maxzoom: 15,
+        attribution: "Höhendaten: Mapzen, AWS Terrain Tiles"
+      });
+      const first = lmap.getStyle().layers.find(l => l.type === "symbol");
+      lmap.addLayer({
+        id: "relief", type: "hillshade", source: "dem",
+        paint: { "hillshade-exaggeration": 0.6, "hillshade-shadow-color": "#3a4350" }
+      }, first ? first.id : undefined);
+      mapReady = true;
+      set3D(true);
+      showOverview(0);
+    });
+    // Wenn der Kartenstil nicht lädt (kein Internet, gesperrt), zurück zur Skizze
+    lmap.on("error", e=>{
+      // einzelne Kachel-Fehler ignorieren, nur Fehler beim Laden des Kartenstils zählen
+      if(!mapReady && !(e && (e.sourceId || e.tile))) setTimeout(fallbackToSketch, 0);
+    });
+    setTimeout(()=>{ if(lmap && !mapReady) fallbackToSketch(); }, 10000);
+  }catch(e){
+    fallbackToSketch();
+  }
+}
+
+function set3D(on){
+  is3D = on;
+  const b = document.getElementById("btn3d");
+  if(b) b.classList.toggle("active", on);
+  if(!lmap || !mapReady) return;
+  lmap.setTerrain(on ? { source: "dem", exaggeration: 1.4 } : null);
+  lmap.easeTo({ pitch: on ? 55 : 0, bearing: on ? -15 : 0, duration: 800 });
+}
+
+function showOverview(ms){
+  if(!lmap || !mapReady) return;
+  const b = new maplibregl.LngLatBounds();
+  sites.concat([DEPOT]).forEach(s => b.extend([s.lng, s.lat]));
+  lmap.fitBounds(b, {
+    padding: 70, maxZoom: 14,
+    pitch: is3D ? 55 : 0, bearing: is3D ? -15 : 0,
+    duration: typeof ms === "number" ? ms : 900
+  });
+}
+
+function selectSite(id){
+  selected = id;
+  const s = id === "depot" ? DEPOT : sites.find(x => x.id === id);
+  if(lmap && mapReady && s){
+    lmap.flyTo({ center: [s.lng, s.lat], zoom: 14.5, pitch: is3D ? 60 : 0, duration: 1200 });
+  }
+  render();
+}
+
+function syncRealMarkers(){
+  sites.concat([DEPOT]).forEach(s=>{
+    const content = marker(s, s.id === "depot");
+    if(lmarkers[s.id]){
+      const wrap = lmarkers[s.id].getElement();
+      wrap.innerHTML = "";
+      wrap.appendChild(content);
+    } else {
+      const wrap = document.createElement("div");
+      wrap.className = "lm";
+      wrap.appendChild(content);
+      lmarkers[s.id] = new maplibregl.Marker({ element: wrap, anchor: "center" })
+        .setLngLat([s.lng, s.lat]).addTo(lmap);
+    }
+    lmarkers[s.id].getElement().style.zIndex = selected === s.id ? 5 : 1;
+  });
+}
+
+document.getElementById("btn3d").onclick = ()=> set3D(!is3D);
+document.getElementById("btnOverview").onclick = ()=> showOverview();
+
+// Solange ein Finger oder die Maus gedrückt ist, wird nicht neu gezeichnet,
+// sonst gehen Klicks verloren.
+document.addEventListener("pointerdown", ()=>{ pressing = true; pressStart = Date.now(); }, true);
+document.addEventListener("pointercancel", ()=>{ pressing = false; }, true);
+document.addEventListener("pointerup", ()=>{ setTimeout(()=>{ pressing = false; render(); }, 0); }, true);
+
+initRealMap();
+render();
+if(USE_SIMULATION) setInterval(tick, 1500);
+</script>
+</body>
+</html>
