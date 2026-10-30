@@ -18,7 +18,8 @@ Prüfe nach jeder Änderung:
 9. Gibt es Fehler im JavaScript-Code oder Fälle, die abstürzen könnten (Maschine ohne Baustelle, gelöschte Baustelle ist noch ausgewählt, leere Listen)?
 10. Gibt es Tests in `tests/` für die geänderte Funktion?
 11. Landet etwas im Ordner `public`, das nicht öffentlich sein darf?
-12. Modi: Werden im Modus Leicht MapLibre und three.js nie geladen? Gibt es die 3D-Ansicht nur im Modus 3D? Gibt `close3D()` alle Ressourcen frei (Renderer, Texturen, Materialien, Körper, Ereignisse), auch beim Wechsel auf Leicht und bei einer gelöschten Baustelle? Zeigt das 3D-Fenster Störungen auch als Banner und den Status nicht nur über Farbe?
+12. Meldungen: Steht bei jeder Meldung, wer sie abgeschickt hat und wann, und setzt das die Datenbank (nicht die Seite)? Gibt "Nachgeliefert" nur Maschinen frei, die auf dasselbe Material warten? Entsteht ein eigenes Material nur durch den ausdrücklichen Tipp auf "neu hinzufügen"? Dürfen alle Freigegebenen eigene Materialien eintippen, aber nur Schreiber und Admins löschen?
+13. Modi: Werden im Modus Leicht MapLibre und three.js nie geladen? Gibt es die 3D-Ansicht nur im Modus 3D? Gibt `close3D()` alle Ressourcen frei (Renderer, Texturen, Materialien, Körper, Ereignisse), auch beim Wechsel auf Leicht und bei einer gelöschten Baustelle? Zeigt das 3D-Fenster Störungen auch als Banner und den Status nicht nur über Farbe?
 
 Antworte kurz auf Deutsch: was ist gut, was ist fehlerhaft, was soll geändert werden.
 Ändere selbst keinen Code.

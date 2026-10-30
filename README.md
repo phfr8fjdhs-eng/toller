@@ -15,7 +15,8 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 
 - Klick auf eine Baustelle: rechts siehst du ihre Maschinen
 - Bedarf: Auf der Baustelle frei schreiben, was gebraucht wird, abhaken wenn erledigt (alle Freigegebenen). Es gibt bewusst keine Prozentanzeigen für Material
-- Läuft eine Maschine nicht: "Defekt", "Material fehlt" oder "Diesel fehlt" melden. Danach "Repariert", "Nachgeliefert" oder "Getankt"
+- Läuft eine Maschine nicht: "Defekt", "Material fehlt" oder "Diesel fehlt" melden. Danach "Repariert", "Nachgeliefert" oder "Getankt". An der Maschine steht, wer es gemeldet hat und wann
+- "Material fehlt" öffnet eine Auswahl mit über 450 Materialien (suchen, nach Kategorie filtern). Fehlt etwas in der Liste, tippst du den Namen ein und wählst "neu hinzufügen", das darf jede freigegebene Person und danach steht es allen zur Verfügung. Dazu freiwillig Menge oder Hinweis
 - "Werkhof" schickt eine Maschine in den Werkhof zurück, bei "Aus dem Werkhof einsetzen" holst du sie auf die gewählte Baustelle
 - Oben filterst du nach Sparte, mehrere gleichzeitig sind möglich (zum Beispiel Gartenbau und Strassenbau)
 - Live-Modus: "+ Baustelle" (mit Adresssuche oder Kartenklick), "+ Maschine", Admins verwalten "Benutzer"
@@ -23,6 +24,7 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 ## Ordner
 - `public/index.html`: die ganze Seite
 - `public/config.js`: Einstellungen (Supabase-Adresse, anon-Key, Werkhof)
+- `public/materialien.js`: Materialkatalog für "Material fehlt" (Vorschlagsliste, bitte an die Firma anpassen)
 - `supabase/schema.sql`: Tabellen und Zugriffsregeln; `supabase/beispieldaten.sql`: optionale Beispieldaten
 - `SUPABASE-ANLEITUNG.md`: Datenbank einrichten
 - `tests/`: automatische Tests (`bash tests/db_test.sh`, `python3 tests/app_test.py`). Das echte 3D-Bild prüfen sie nicht, das muss man einmal selbst ansehen

@@ -11,6 +11,8 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 ## Begriffe
 - **Sparte:** `garten` (Gartenbau), `strasse` (Strassenbau), `tief` (Tiefbau)
 - **Baustelle:** Ort auf der Karte mit Maschinen und einer Bedarfsliste
+- **Materialmeldung:** Tipp auf "Material fehlt" an einer Maschine öffnet eine Auswahl aus dem Katalog (`public/materialien.js`, über 450 übliche Bezeichnungen mit Suche und Kategorie). Jede freigegebene Person darf zusätzlich ein eigenes Material eintippen, es wird in `materials` gespeichert und steht allen zur Auswahl. Dazu ein freies Feld für Menge oder Hinweis (nie Prozent). Grund der Maschine: `Material fehlt: Kies 0/32` oder `Material fehlt: Kies 0/32 · ca. 20 m³`
+- **Absender:** Bei jeder Meldung (Defekt, Material fehlt, Diesel fehlt) steht, wer sie abgeschickt hat und wann. Name und Zeit setzt die Datenbank (Trigger `machines_stamp`), nicht die Seite
 - **Bedarf:** frei geschriebener Text je Baustelle, was gebraucht wird (z. B. "20 m³ Kies bis Mittwoch"). Alle Freigegebenen schreiben und haken ab. Keine Mengen in Prozent
 - **Modus:** `leicht` (ohne Karte und 3D, für ältere Handys) oder `3d` (Karte und 3D-Ansicht der Baustelle, für Computer)
 - **Werkhof:** Standort für Maschinen, die gerade nicht im Einsatz sind (feste Position aus `public/config.js`, keine Datenbank-Zeile)
@@ -18,7 +20,7 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - **Freigabe:** Neue Benutzer sehen nichts, bis ein Admin sie freigibt
 
 ## Technik
-- Reines HTML, CSS und JavaScript: `public/index.html` (Seite) und `public/config.js` (Einstellungen). Kein Build-Schritt.
+- Reines HTML, CSS und JavaScript: `public/index.html` (Seite), `public/config.js` (Einstellungen) und `public/materialien.js` (Materialkatalog, nur Namen, keine Firmendaten). Kein Build-Schritt.
 - Datenbank, Login und Echtzeit: Supabase (supabase-js von unpkg). Schema: `supabase/schema.sql`, Beispieldaten: `supabase/beispieldaten.sql`. Einrichtung: `SUPABASE-ANLEITUNG.md`
 - **Demo und Live:** Ohne `supabaseUrl` und `supabaseKey` in `config.js` läuft der **Demo-Modus** (erfundene Daten, lokale Simulation, nichts wird gespeichert). Mit Werten läuft der **Live-Modus**
 - **Leicht und 3D (Anzeige-Modus, unabhängig von Demo/Live):** Beim ersten Öffnen wählt `detectMode()` nach Gerät (kleiner Bildschirm, wenig Speicher, 2 Kerne, Datensparmodus -> Leicht). Der Knopf "Modus" wechselt, die Wahl wird im Gerät gemerkt, `?modus=leicht` oder `?modus=3d` in der Adresse gewinnt (für Tests). Im Leicht-Modus werden MapLibre und three.js **nie** geladen, Szenen bei vielen Baustellen erst beim Hinscrollen gezeichnet (`lazyScene`)
@@ -32,12 +34,13 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 ## Datenmodell (Datenbank)
 - `profiles`: `id`, `email`, `name`, `role` (`admin` oder `mitarbeiter`), `approved`
 - `sites` (Baustellen): `id`, `name`, `sparte`, `lat`, `lng`
-- `machines`: `id`, `name`, `typ`, `sparte`, `site_id` (leer = Werkhof), `status` (`running`, `waiting`, `broken`, `off`), `reason` (bei `waiting`: "Material fehlt" oder "Diesel fehlt")
+- `machines`: `id`, `name`, `typ`, `sparte`, `site_id` (leer = Werkhof), `status` (`running`, `waiting`, `broken`, `off`), `reason` (bei `waiting`: `Material fehlt: <Material>` mit optionalem ` · <Hinweis>`, oder `Diesel fehlt`), `reported_by`, `reported_name`, `reported_at` (Absender und Zeit der Meldung, nur vom Trigger `machines_stamp` gesetzt: neue Meldung = aktuelle Person, läuft wieder oder Werkhof = leer, sonst unverändert)
+- `materials` (eigene Materialien der Mitarbeiter, zusätzlich zum Katalog in `materialien.js`): `id`, `name` (2 bis 60 Zeichen, eindeutig ohne Gross/Klein), `author` (setzt der Trigger `materials_stamp`), `created_by`, `created_at`. Freigegebene lesen und schreiben, nichts ändern, löschen dürfen der Schreiber und Admins
 - `needs` (Bedarf): `id`, `site_id`, `text`, `created_by`, `created_at`, `done`, `done_by`. Freigegebene lesen, schreiben und haken ab (ein Trigger `needs_guard` lässt Nicht-Admins nur `done` und `done_by` ändern), löschen dürfen der Schreiber und Admins
 - `activity` (Protokoll): `id`, `created_at`, `user_id`, `text`
-- In der Seite werden Zeilen auf Objekte mit `site` umgeschrieben (`mapSite`, `mapMachine`, `mapNeed`)
+- In der Seite werden Zeilen auf Objekte mit `site`, `by`, `at` umgeschrieben (`mapSite`, `mapMachine`, `mapNeed`, `mapMaterial`)
 - Alte Datenbanken haben noch die unbenutzten Spalten `material_name`, `material_level` und `tank`. Sie schaden nicht (Standardwerte) und lassen sich optional entfernen (siehe `SUPABASE-ANLEITUNG.md`)
-- Fehlt die Tabelle `needs` (schema.sql noch nicht erneut ausgeführt), läuft die Seite weiter und zeigt beim Bedarf einen Hinweis (`needsOk`)
+- Fehlt die Tabelle `needs` oder `materials` (schema.sql noch nicht erneut ausgeführt), läuft die Seite weiter und zeigt einen Hinweis (`needsOk`, `matsOk`). Fehlen nur die Spalten `reported_*`, wird kein Absender gezeigt
 
 ## Regeln
 - Status-Farben immer gleich: grün = läuft, gelb = wartet (Material oder Diesel fehlt), rot blinkend = kaputt, grau = im Werkhof
@@ -50,6 +53,7 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Automatisches Neuzeichnen (`softRender`) wartet, solange ein Finger gedrückt ist, sonst gehen Klicks verloren
 - Löschen mit Zwei-Schritt-Knopf (`confirmBtn`), nicht mit `confirm()`
 - Die Anzeige ist ein Arbeitswerkzeug einer Firma: sachlich, keine Spielelemente, und die Zahlen müssen echt und ehrlich sein (kein Schönfärben)
+- Materialnamen und Hinweise aus Benutzereingaben (Auswahl, eigener Eintrag, Hinweis) nur mit `textContent` zeigen. Ein eigener Eintrag entsteht nur durch den ausdrücklichen Tipp auf "neu hinzufügen", nie durch Enter oder aus Versehen. Nachgeliefert gibt nur Maschinen frei, die auf dasselbe Material warten (der Status muss ehrlich bleiben)
 - **Keine Prozentanzeigen für Material, Diesel oder Baustellen.** Material und Wünsche stehen als frei geschriebener Bedarf auf der Baustelle, Diesel ist nur die Meldung "Diesel fehlt". Einzige Prozentzahl: die Einsatzbereitschaft (Anteil laufender Maschinen im Einsatz, eine echte Zählung)
 - Im 3D-Fenster gilt dasselbe wie sonst: Status nie nur über die Farbe (Text am Schild), Störung auch als Banner im Fenster, Sparte nur durch den Boden und den Buchstaben-Tag, nie in Status-Farben, beim Schliessen alles freigeben
 - three.js bleibt fest auf Version 0.147.0 (siehe Technik). Eine neue Version braucht ein neues Einbinden der OrbitControls als Modul und einen Test im echten Browser
@@ -61,6 +65,7 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 ## Tests
 - Alles in `tests/`: `db_test.sh` (Schema und Zugriffsregeln auf lokaler PostgreSQL, braucht Root-Rechte), `app_test.py` (Seite im Browser mit Ersatz-Datenbank aus `stubs.js`, braucht Playwright)
 - Vor jedem Hochladen laufen lassen. Die Tests ersetzen nicht den Test gegen echtes Supabase und die echte Karte
+- Die Browser-Tests laufen ohne Zufall (`Math.random` ist festgelegt), weil die Demo sonst von selbst Störungen meldet und Ergebnisse schwanken. Die Simulation prüft ein eigener Test
 - `stubs.js` ersetzt auch three.js: die Tests prüfen, dass je Maschine ein Modell entsteht, Texte auf den Schildern stehen, bei Änderungen neu gebaut und beim Schliessen alles freigegeben wird. **Das echte 3D-Bild (Form der Maschinen, Kamera, Licht, Blinken) ist damit nicht geprüft** und muss einmal auf einem Computer mit echtem WebGL angesehen werden
 
 ## Befehle
@@ -68,7 +73,8 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Tests: `bash tests/db_test.sh` und `python3 tests/app_test.py`
 
 ## Aufgaben für später
-- Erster Test gegen ein echtes Supabase-Projekt (Anmeldung, Freigabe, Echtzeit, Adresssuche, Tabelle needs)
+- Erster Test gegen ein echtes Supabase-Projekt (Anmeldung, Freigabe, Echtzeit, Adresssuche, Tabellen needs und materials, Absender an Meldungen)
+- Materialkatalog von der Firma prüfen und anpassen lassen (`public/materialien.js` ist eine Vorschlagsliste mit üblichen Bezeichnungen, von Claude zusammengestellt)
 - 3D-Ansicht einmal mit echtem WebGL ansehen und die Maschinenmodelle verfeinern (three.js konnte in der Entwicklungsumgebung nicht geladen werden)
 - Standort der Mitarbeiter oder Maschinen auf der Baustelle: **noch nicht gebaut**, offene Fragen zuerst klären (Personen oder Maschinen, wer sieht es, Einwilligung und Datenschutz, nur aktuelle Position, Information der Mitarbeiter)
 - **Excel-Anbindung (bewusst später):** Excel-Tabellen mit Baustellen, Maschinen und Status sollen automatisch eingelesen werden. Entscheidungen: Excel liefert auch den Status, Excel ist dann die Quelle der Wahrheit für seine Zeilen (Handy darf diese Status nicht ändern), im Dashboard angelegte Zeilen bleiben erhalten, der Sync fasst nur Excel-Zeilen an. Datei in SharePoint/OneDrive, Sync als zeitgesteuerte Funktion in der Cloud, Leserecht nur auf eine Datei über Microsoft Graph. Die IT muss die App-Registrierung anlegen. Vorher Beispieldatei ansehen

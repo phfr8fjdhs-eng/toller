@@ -19,7 +19,8 @@ Solange du das nicht gemacht hast, läuft die Seite im **Demo-Modus** mit erfund
 2. Auf GitHub die Datei `supabase/schema.sql` öffnen, alles kopieren (Knopf "Copy raw file"), in Supabase einfügen und auf **Run** klicken.
 3. Es sollte "Success" erscheinen. Das Schema lässt sich gefahrlos ein zweites Mal ausführen.
    **Update einer schon eingerichteten Datenbank** (zum Beispiel für den neuen Bedarf auf den Baustellen): `schema.sql` einfach noch einmal ausführen. Bestehende Daten bleiben erhalten.
-   Solange das nicht gemacht ist, läuft die Seite weiter und zeigt beim Bedarf den Hinweis "Datenbank-Update nötig".
+   Solange das nicht gemacht ist, läuft die Seite weiter und zeigt beim Bedarf den Hinweis "Datenbank-Update nötig". Bei "Material fehlt" gehen Katalog und Meldung trotzdem, nur eigene Materialien werden noch nicht für alle gespeichert und der Absender einer Meldung fehlt.
+   Wer eine Meldung abgeschickt hat, trägt die Datenbank selbst ein (Name aus dem Profil). Das lässt sich von der Seite aus nicht fälschen.
 4. Optional: Dasselbe mit `supabase/beispieldaten.sql`, wenn du Beispielbaustellen zum Ausprobieren willst.
 
 ## 3. Anmeldung einstellen
@@ -78,6 +79,9 @@ alter table public.machines drop column if exists tank;
 | Status ändern, Material oder Diesel fehlt melden | nein | ja | ja |
 | Bedarf auf einer Baustelle schreiben und abhaken | nein | ja | ja |
 | Bedarf löschen | nein | nur eigener | ja |
+| Eigenes Material in der Auswahl ergänzen | nein | ja | ja |
+| Eigenes Material löschen | nein | nur eigenes | ja |
+| Sehen, wer eine Meldung abgeschickt hat | nein | ja | ja |
 | Baustellen und Maschinen löschen | nein | nein | ja |
 | Benutzer freigeben und sperren | nein | nein | ja |
 
@@ -95,5 +99,5 @@ alter table public.machines drop column if exists tank;
   Prüfe in Supabase unter **Table Editor, profiles**.
 - **"permission denied" oder leere Listen:** Du bist noch nicht freigegeben, oder `schema.sql` fehlt.
 - **Kein "live" oben, Änderungen erscheinen erst nach Neuladen:** Echtzeit ist nicht aktiv. Führe `schema.sql` noch einmal aus
-  und prüfe unter **Database, Publications**, ob `sites`, `machines`, `needs` und `activity` bei `supabase_realtime` aufgelistet sind.
+  und prüfe unter **Database, Publications**, ob `sites`, `machines`, `needs`, `materials` und `activity` bei `supabase_realtime` aufgelistet sind.
 - **Bestätigungs-Mail kommt nicht:** Spam-Ordner prüfen, Site URL prüfen, oder die Person unter **Authentication, Users** selbst anlegen.
