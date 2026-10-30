@@ -69,6 +69,14 @@
   .scene .mach.off{opacity:.6}
   .scene .mach.broken{animation:blink .8s infinite}
   .info{font-size:11px;color:var(--muted);margin-top:2px}
+  .badge{font-size:11px;font-weight:700;border:1px solid var(--sel);color:var(--sel);border-radius:999px;padding:0 7px;flex:none}
+  .needadd{display:flex;gap:8px;margin:6px 0}
+  .needadd input{flex:1;min-width:0}
+  .need{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line);font-size:13px}
+  .need .ntxt{flex:1;min-width:0;overflow-wrap:anywhere}
+  .need.done .ntxt{color:var(--muted);text-decoration:line-through}
+  .need button{padding:4px 8px;font-size:12px}
+  @media(max-width:600px){.need button{padding:9px 12px}}
 
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:16px}
   .panel h2{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
@@ -206,6 +214,7 @@
     </div>
     <div class="panel"><h2>Baustelle</h2><div id="detail"></div></div>
     <div class="panel"><h2>Probleme</h2><div id="problems"></div></div>
+    <div class="panel"><h2>Offener Bedarf</h2><div id="needsAll"></div></div>
     <div class="panel"><h2>Protokoll</h2><div id="log"></div></div>
   </aside>
 </main>
@@ -254,6 +263,8 @@ const DEPOT = { id:"depot", name:"Werkhof", sparte:null, lat:CFG.depot.lat, lng:
 /* =============================================================== Zustand */
 let sites = [];        // { id, name, sparte, lat, lng, x?, y? }
 let machines = [];     // { id, name, typ, sparte, site (Baustellen-Id oder null), status, reason }
+let needs = [];        // Bedarf: { id, site, text, author, createdBy, createdAt, done, doneBy }
+let needsOk = true;    // false, wenn die Datenbank noch keine Tabelle needs hat (schema.sql erneut ausführen)
 let selected = null;
 const filter = new Set();      // gewählte Sparten, leer = alle (Mehrfachauswahl)
 let incidents = 0;
@@ -285,6 +296,11 @@ function loadDemo(){
     M(11,"Radlader 2","Radlader","garten","s4","running"), M(12,"Aufsitzmäher","Mäher","garten","s4","running"),
     M(13,"Bagger 2","Bagger","tief",null,"off"), M(14,"LKW 2","LKW","strasse",null,"off"),
     M(15,"Teleskoplader","Teleskoplader","garten",null,"off")
+  ];
+  const N = (id,site,text,hours) => ({ id, site, text, author:"Demo", createdBy:"demo", createdAt:new Date(Date.now() - hours * 3600000).toISOString(), done:false, doneBy:"" });
+  needs = [
+    N("b1","s2","Asphalt: 2 Lieferungen bis Mittwoch",20), N("b2","s3","20 m³ Kies bis Mittwoch",5),
+    N("b3","s3","10 Absperrgitter",3), N("b4","s4","10 Eichen, Lieferung am Freitag",30)
   ];
   selected = "s3";
   DEPOT.x = 62; DEPOT.y = 84;   // feste Position des Werkhofs auf der Skizze
@@ -418,6 +434,47 @@ function deploy(m, siteId){
 const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, lat:r.lat, lng:r.lng });
 const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "" });
 
+const mapNeed = r => ({ id:r.id, site:r.site_id, text:r.text, author:r.author || "", createdBy:r.created_by, createdAt:r.created_at, done:!!r.done, doneBy:r.done_by || "" });
+function upsertNeed(n){
+  const i = needs.findIndex(x => x.id === n.id);
+  if(i >= 0) Object.assign(needs[i], n); else needs.unshift(n);
+}
+const openNeeds = siteId => needs.filter(n => n.site === siteId && !n.done);
+const canDeleteNeed = n => isAdmin() || (LIVE && me && n.createdBy === me.id);
+
+async function addNeed(s, text){
+  text = text.trim().slice(0, 200);
+  if(!text) return false;
+  if(!LIVE){
+    needs.unshift({ id:"b" + (++localId), site:s.id, text, author:"Demo", createdBy:"demo", createdAt:new Date().toISOString(), done:false, doneBy:"" });
+    addLog("Bedarf: " + text + " (" + s.name + ")"); render();
+    return true;
+  }
+  const r = await sb.from("needs").insert({ site_id:s.id, text, author:(me.name || "").slice(0, 60) }).select().single();
+  if(r.error){ toast("Bedarf konnte nicht gespeichert werden: " + r.error.message, true); return false; }
+  upsertNeed(mapNeed(r.data)); addLog("Bedarf: " + text + " (" + s.name + ")"); render();
+  return true;
+}
+
+async function setNeedDone(n, done){
+  const s = findSite(n.site);
+  n.done = done; n.doneBy = done ? (LIVE && me ? me.name : "Demo") : "";
+  addLog((done ? "Bedarf erledigt: " : "Bedarf wieder offen: ") + n.text + (s ? " (" + s.name + ")" : "")); render();
+  if(LIVE){
+    const r = await sb.from("needs").update({ done, done_by:(n.doneBy || "").slice(0, 60), done_at:done ? new Date().toISOString() : null }).eq("id", n.id);
+    if(r.error){ toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll(); }
+  }
+}
+
+async function deleteNeed(n){
+  needs = needs.filter(x => x.id !== n.id);
+  render();
+  if(LIVE){
+    const r = await sb.from("needs").delete().eq("id", n.id);
+    if(r.error){ toast("Löschen fehlgeschlagen: " + r.error.message, true); loadAll(); }
+  }
+}
+
 function upsertSite(s){
   const i = sites.findIndex(x => x.id === s.id);
   if(i >= 0) Object.assign(sites[i], s); else sites.push(s);
@@ -465,6 +522,7 @@ async function deleteSite(s){
   // Maschinen der Baustelle zuerst in den Werkhof, damit keine Maschine ohne Ort "läuft"
   machines.filter(m => m.site === s.id).forEach(m => { m.site = null; m.status = "off"; m.reason = ""; });
   sites = sites.filter(x => x.id !== s.id);
+  needs = needs.filter(n => n.site !== s.id);
   if(selected === s.id) selected = null;
   addLog("Baustelle gelöscht: " + s.name); render();
   if(LIVE){
@@ -594,20 +652,25 @@ function drawGround(svg, kind, kinds){
   }
 }
 
-function buildScene(s, ms, isDepot){
+function buildScene(s, ms, isDepot, needCount){
   const sorted = ms.slice().sort((a, b) => RANK[a.status] - RANK[b.status]);   // Schlechteste zuerst, die bleiben sichtbar
   const over = sorted.length > SCENE_MAX;
   const shown = over ? sorted.slice(0, SCENE_MAX - 1) : sorted;
   const hidden = over ? sorted.slice(SCENE_MAX - 1) : [];
   const kinds = new Set(sorted.map(m => machKind(m.typ)));
   const ground = isDepot ? "hof" : (s.sparte === "strasse" || s.sparte === "garten") ? s.sparte : "tief";
-  const key = [ground, kinds.has("walze") || kinds.has("fertiger") ? 1 : 0,
+  const key = [ground, needCount > 0 ? 1 : 0, kinds.has("walze") || kinds.has("fertiger") ? 1 : 0,
     kinds.has("maeher") ? 1 : 0, kinds.has("bagger") || kinds.has("mini") ? 1 : 0,
     shown.map(m => [m.typ, m.status, m.name].join("|")).join(";"), hidden.length, hidden.length ? hidden[0].status : ""].join("#");
   if(scenePool.has(key)) return scenePool.get(key).cloneNode(true);
 
   const svg = sv("svg", { viewBox:"0 0 " + SCENE_W + " " + SCENE_H, class:"scene", "aria-hidden":"true" });
   drawGround(svg, ground, kinds);
+  if(needCount > 0 && !isDepot){                                                      // Bedarfstafel: es gibt offenen Bedarf (keine Menge)
+    svg.appendChild(svR(159, 30, 2, 22, "#6b7785")); svg.appendChild(svR(176, 30, 2, 22, "#6b7785"));
+    svg.appendChild(svR(152, 12, 32, 22, "#e6edf3", 2));
+    [18, 23, 28].forEach(y => svg.appendChild(svR(156, y, y === 28 ? 14 : 24, 2, "#4a5460")));
+  }
   svg.appendChild(sv("line", { x1:0, y1:5, x2:SCENE_W, y2:5, stroke:"#9aa3ad", "stroke-width":1 }));                       // Bauzaun
   svg.appendChild(sv("line", { x1:3, y1:5, x2:SCENE_W, y2:5, stroke:"#9aa3ad", "stroke-width":6, "stroke-dasharray":"1.2 11" }));
 
@@ -650,20 +713,79 @@ function marker(s, isDepot){
   d.style.left = p.x + "%";
   d.style.top = p.y + "%";
 
-  d.appendChild(buildScene(s, ms, isDepot));
+  const nOpen = isDepot ? 0 : openNeeds(s.id).length;
+  d.appendChild(buildScene(s, ms, isDepot, nOpen));
 
   const top = el("div", "top");
   if(s.sparte) top.appendChild(el("span", "tag", TAG[s.sparte]));
   top.appendChild(el("span", "nm", s.name));
+  if(nOpen){ const b = el("span", "badge", String(nOpen)); b.title = nOpen + (nOpen === 1 ? " offener Bedarf" : " offene Bedarfe"); top.appendChild(b); }
   d.appendChild(top);
 
   const dots = el("div", "dots");
   ms.slice(0, 24).forEach(m => dots.appendChild(el("span", "dot " + m.status)));
   d.appendChild(dots);
 
-  d.appendChild(el("div", "info", ms.length === 1 ? "1 Maschine" : ms.length + " Maschinen"));
+  d.appendChild(el("div", "info", (ms.length === 1 ? "1 Maschine" : ms.length + " Maschinen") + (nOpen ? " · " + nOpen + " Bedarf offen" : "")));
   d.onclick = ()=>selectSite(s.id);
   return d;
+}
+
+const needTime = iso => new Date(iso).toLocaleString("de-CH", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
+
+// Bedarf einer Baustelle: freier Text, abhaken, löschen (Schreiber und Admin)
+function renderNeeds(box, s){
+  box.appendChild(el("div", "sub", "Bedarf"));
+  if(LIVE && !needsOk){
+    box.appendChild(el("div", "empty", "Der Bedarf braucht ein Datenbank-Update: schema.sql im Supabase SQL Editor noch einmal ausführen."));
+    return;
+  }
+  const row = el("div", "needadd");
+  const inp = el("input"); inp.type = "text"; inp.id = "needInput"; inp.maxLength = 200; inp.autocomplete = "off";
+  inp.placeholder = "Was wird gebraucht?";
+  inp.setAttribute("aria-label", "Was wird auf dieser Baustelle gebraucht?");
+  const add = el("button", "primary", "Hinzufügen"); add.id = "needAddBtn";
+  const submit = ()=>{ const v = inp.value; inp.blur(); if(v.trim()) addNeed(s, v); };   // blur, damit das Neuzeichnen die Liste aktualisiert
+  add.onclick = submit;
+  inp.addEventListener("keydown", e=>{ if(e.key === "Enter"){ e.preventDefault(); submit(); } });
+  row.appendChild(inp); row.appendChild(add);
+  box.appendChild(row);
+
+  const mine = needs.filter(n => n.site === s.id);
+  const open = mine.filter(n => !n.done), done = mine.filter(n => n.done);
+  if(!open.length) box.appendChild(el("div", "empty", "Nichts offen."));
+  const line = (n)=>{
+    const r = el("div", "need" + (n.done ? " done" : ""));
+    const b = el("button", n.done ? "" : "primary", n.done ? "Wieder offen" : "Erledigt");
+    b.onclick = ()=>setNeedDone(n, !n.done);
+    const t = el("div", "ntxt");
+    t.appendChild(el("div", "", n.text));
+    t.appendChild(el("div", "muted", (n.author || "–") + " · " + needTime(n.createdAt) + (n.done && n.doneBy ? " · erledigt von " + n.doneBy : "")));
+    r.appendChild(b); r.appendChild(t);
+    if(canDeleteNeed(n)) r.appendChild(confirmBtn("Löschen", "n:" + n.id, ()=>deleteNeed(n)));
+    return r;
+  };
+  open.forEach(n => box.appendChild(line(n)));
+  done.slice(0, 3).forEach(n => box.appendChild(line(n)));
+  if(done.length > 3) box.appendChild(el("div", "empty", "… und " + (done.length - 3) + " weitere erledigte"));
+}
+
+// Übersicht über allen offenen Bedarf (nur sichtbare Sparten), neuester zuerst
+function renderNeedsAll(){
+  const box = $("needsAll");
+  box.innerHTML = "";
+  if(LIVE && !needsOk){ box.appendChild(el("div", "empty", "Datenbank-Update nötig (schema.sql erneut ausführen).")); return; }
+  const list = needs.filter(n => !n.done).filter(n => { const s = findSite(n.site); return s && showSparte(s.sparte); });
+  if(!list.length){ box.appendChild(el("div", "empty", "Nichts offen.")); return; }
+  list.slice(0, 40).forEach(n=>{
+    const s = findSite(n.site);
+    const i = el("div", "item");
+    i.appendChild(el("span", "tag", TAG[s.sparte] || "?"));
+    i.appendChild(el("span", "", s.name + ": " + n.text));
+    i.onclick = ()=>selectSite(n.site);
+    box.appendChild(i);
+  });
+  if(list.length > 40) box.appendChild(el("div", "empty", "… und " + (list.length - 40) + " weitere."));
 }
 
 function renderDetail(){
@@ -685,6 +807,9 @@ function renderDetail(){
   if(s.sparte) head.appendChild(el("span", "muted", SPARTEN[s.sparte]));
   box.appendChild(head);
 
+  if(s.id !== "depot") renderNeeds(box, s);
+
+  box.appendChild(el("div", "sub", "Maschinen"));
   const list = machines.filter(m => loc(m) === s.id);
   if(!list.length) box.appendChild(el("div", "empty", "Keine Maschinen hier."));
   list.forEach(m=>{
@@ -814,6 +939,7 @@ function render(){
   if(!logs.length) lEl.appendChild(el("div", "empty", "Noch nichts passiert."));
   logs.forEach(t => lEl.appendChild(el("div", "log", t)));
 
+  renderNeedsAll();
   renderList();
   renderDetail();
 }
@@ -1142,7 +1268,7 @@ async function handleAuthSubmit(e){
 
 function stopLive(){
   if(channel){ try{ sb.removeChannel(channel); }catch(e){} channel = null; }
-  sites = []; machines = []; logs.length = 0; seenLog.clear(); selected = null;
+  sites = []; machines = []; needs = []; needsOk = true; logs.length = 0; seenLog.clear(); selected = null;
   me = null; subscribedOnce = false; didOverview = false;
   $("conn").hidden = true;
 }
@@ -1182,12 +1308,16 @@ async function loadAll(){
   const res = await Promise.all([
     sb.from("sites").select("*").order("name"),
     sb.from("machines").select("*").order("name"),
-    sb.from("activity").select("*").order("created_at", { ascending:false }).limit(8)
+    sb.from("activity").select("*").order("created_at", { ascending:false }).limit(8),
+    sb.from("needs").select("*").order("created_at", { ascending:false }).limit(1000)
   ]);
   const err = res[0].error || res[1].error || res[2].error;
   if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
   sites = res[0].data.map(mapSite);
   machines = res[1].data.map(mapMachine);
+  // Fehlt die Tabelle needs (Datenbank noch nicht aktualisiert), läuft alles andere trotzdem
+  needsOk = !res[3].error;
+  needs = needsOk ? res[3].data.map(mapNeed) : [];
   logs.length = 0; seenLog.clear();
   res[2].data.slice().reverse().forEach(r => pushLog(r.text, r.created_at, r.id));
   if(selected && !findSite(selected)) selected = null;
@@ -1219,6 +1349,10 @@ function subscribe(){
       upsertMachine(n);
       if(was !== null && was !== "broken" && n.status === "broken") onBreak();   // Störung von einem anderen Handy
     }
+    softRender();
+  });
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"needs" }, p=>{
+    if(p.eventType === "DELETE") needs = needs.filter(n => n.id !== p.old.id); else upsertNeed(mapNeed(p.new));
     softRender();
   });
   ch.on("postgres_changes", { event:"INSERT", schema:"public", table:"activity" }, p=>{

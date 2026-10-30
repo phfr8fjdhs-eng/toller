@@ -31,7 +31,7 @@
   window.__mapClick = function(lat, lng){ (handlers.click || []).forEach(cb => cb({ lngLat:{ lat, lng } })); };
 
   // ---- Supabase
-  const db = window.__db = { sites:[], machines:[], activity:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null };
+  const db = window.__db = { sites:[], machines:[], needs:[], activity:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null };
   const nid = () => "id" + (db.seq++);
   const me = () => db.session ? db.profiles.find(p => p.id === db.session.user.id) : null;
   const approved = () => { const m = me(); return !!(m && m.approved); };
@@ -64,7 +64,7 @@
       let rows = T.filter(r => canRead(r) && this.fl.every(f => f(r)));
       if(this.op === "insert"){
         if(isProf || !approved()) return { data:null, error:rls };
-        const row = Object.assign({ id:this.t === "activity" ? db.seq++ : nid(), created_at:new Date().toISOString() }, this.t === "machines" ? { typ:"", status:"off", reason:"", site_id:null } : {}, this.row);
+        const row = Object.assign({ id:this.t === "activity" ? db.seq++ : nid(), created_at:new Date().toISOString() }, this.t === "machines" ? { typ:"", status:"off", reason:"", site_id:null } : {}, this.t === "needs" ? { author:"", done:false, done_by:"", done_at:null, created_by:(me() || {}).id } : {}, this.row);
         T.push(row); emit(this.t, "INSERT", row);
         return this.sel ? { data:this.one ? row : [row], error:null } : { data:null, error:null };
       }
@@ -74,7 +74,8 @@
         return { data:rows, error:null };
       }
       if(this.op === "delete"){
-        if(!admin()) return { data:[], error:null };
+        if(this.t === "needs") rows = rows.filter(r => admin() || r.created_by === (me() || {}).id);   // Schreiber oder Admin
+        else if(!admin()) return { data:[], error:null };
         rows.forEach(r => { T.splice(T.indexOf(r), 1); emit(this.t, "DELETE", null, { id:r.id }); });
         return { data:rows, error:null };
       }

@@ -6,7 +6,11 @@
 --  * Die allererste Person, die sich registriert, wird automatisch Admin.
 --    Registriere dich deshalb sofort nach der Einrichtung selbst.
 --  * Freigegebene Mitarbeiter dürfen Baustellen und Maschinen ansehen, anlegen und ändern.
---  * Löschen und Benutzer verwalten darf nur ein Admin.
+--  * Bedarf (was auf einer Baustelle gebraucht wird): Freigegebene schreiben und haken ab,
+--    löschen dürfen der Schreiber selbst und Admins.
+--  * Löschen von Baustellen und Maschinen und Benutzer verwalten darf nur ein Admin.
+--
+-- Update einer bestehenden Datenbank: diese Datei einfach nochmals ausführen (sie ist wiederholbar).
 
 -- ---------------------------------------------------------------- Tabellen
 
@@ -41,6 +45,19 @@ create table if not exists public.machines (
   updated_at  timestamptz not null default now()
 );
 
+-- Bedarf je Baustelle: freier Text, zum Beispiel "20 m³ Beton bis Mittwoch"
+create table if not exists public.needs (
+  id          uuid primary key default gen_random_uuid(),
+  site_id     uuid not null references public.sites(id) on delete cascade,
+  text        text not null check (length(trim(text)) between 1 and 200),
+  author      text not null default '' check (length(author) <= 60),
+  created_by  uuid not null default auth.uid(),
+  created_at  timestamptz not null default now(),
+  done        boolean not null default false,
+  done_by     text not null default '' check (length(done_by) <= 60),
+  done_at     timestamptz
+);
+
 create table if not exists public.activity (
   id          bigint generated always as identity primary key,
   created_at  timestamptz not null default now(),
@@ -49,6 +66,7 @@ create table if not exists public.activity (
 );
 
 create index if not exists machines_site_idx on public.machines(site_id);
+create index if not exists needs_site_idx on public.needs(site_id);
 create index if not exists activity_created_idx on public.activity(created_at desc);
 
 -- ---------------------------------------------------------------- Hilfsfunktionen
@@ -106,6 +124,30 @@ begin
 end;
 $$;
 
+-- Beim Bedarf dürfen Mitarbeiter nur abhaken (done, done_by, done_at). Der Inhalt ändert nur ein Admin.
+create or replace function public.needs_guard()
+returns trigger
+language plpgsql
+as $$
+begin
+  if not public.is_admin() and (
+       new.text       is distinct from old.text
+    or new.site_id    is distinct from old.site_id
+    or new.author     is distinct from old.author
+    or new.created_by is distinct from old.created_by
+    or new.created_at is distinct from old.created_at
+  ) then
+    raise exception 'Der Inhalt eines Bedarfs kann nur von Admins geändert werden';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists needs_guard_trg on public.needs;
+create trigger needs_guard_trg
+  before update on public.needs
+  for each row execute function public.needs_guard();
+
 drop trigger if exists machines_touch on public.machines;
 create trigger machines_touch
   before update on public.machines
@@ -116,6 +158,7 @@ create trigger machines_touch
 alter table public.profiles enable row level security;
 alter table public.sites    enable row level security;
 alter table public.machines enable row level security;
+alter table public.needs    enable row level security;
 alter table public.activity enable row level security;
 
 -- Profile: jeder sieht das eigene, Admins sehen alle und verwalten sie
@@ -169,6 +212,24 @@ drop policy if exists machines_delete on public.machines;
 create policy machines_delete on public.machines
   for delete to authenticated using (public.is_admin());
 
+-- Bedarf: Freigegebene lesen, schreiben (nur als sich selbst) und haken ab.
+-- Löschen darf der Schreiber selbst oder ein Admin.
+drop policy if exists needs_select on public.needs;
+create policy needs_select on public.needs
+  for select to authenticated using (public.is_approved());
+
+drop policy if exists needs_insert on public.needs;
+create policy needs_insert on public.needs
+  for insert to authenticated with check (public.is_approved() and created_by = auth.uid());
+
+drop policy if exists needs_update on public.needs;
+create policy needs_update on public.needs
+  for update to authenticated using (public.is_approved()) with check (public.is_approved());
+
+drop policy if exists needs_delete on public.needs;
+create policy needs_delete on public.needs
+  for delete to authenticated using (public.is_admin() or (public.is_approved() and created_by = auth.uid()));
+
 -- Protokoll: lesen und ergänzen, nicht ändern
 drop policy if exists activity_select on public.activity;
 create policy activity_select on public.activity
@@ -179,7 +240,7 @@ create policy activity_insert on public.activity
   for insert to authenticated with check (public.is_approved());
 
 -- Nicht angemeldete Besucher bekommen gar keinen Zugriff
-revoke all on public.profiles, public.sites, public.machines, public.activity from anon;
+revoke all on public.profiles, public.sites, public.machines, public.needs, public.activity from anon;
 revoke execute on function public.is_approved(), public.is_admin() from anon;
 
 -- ---------------------------------------------------------------- Echtzeit
@@ -193,6 +254,10 @@ begin
     end;
     begin
       alter publication supabase_realtime add table public.machines;
+    exception when duplicate_object then null;
+    end;
+    begin
+      alter publication supabase_realtime add table public.needs;
     exception when duplicate_object then null;
     end;
     begin

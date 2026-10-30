@@ -11,11 +11,10 @@ rm -rf $D && mkdir -p $D && chown postgres $D
 su postgres -c "$BIN/initdb -D $D/data -A trust >/dev/null"
 su postgres -c "$BIN/pg_ctl -D $D/data -o '-p 5544 -k $D' -l $D/log -w start >/dev/null"
 P="psql -h $D -p 5544 -U postgres -v ON_ERROR_STOP=1 -q -X"
-$P -d postgres -c "create database t"
-P="$P -d t"
-
-$P <<'SQL'
-create role anon nologin; create role authenticated nologin;
+$P -d postgres -c "create role anon nologin" -c "create role authenticated nologin"
+setup_db () { # $1 = Datenbankname: Supabase-Rahmen nachbauen
+  $P -d postgres -c "create database $1"
+  psql -h $D -p 5544 -U postgres -v ON_ERROR_STOP=1 -q -X -d "$1" <<'SQL'
 create schema auth;
 create table auth.users (id uuid primary key default gen_random_uuid(), email text, raw_user_meta_data jsonb default '{}');
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
@@ -25,6 +24,21 @@ alter default privileges in schema public grant all on tables to anon, authentic
 alter default privileges in schema public grant all on sequences to anon, authenticated;
 alter default privileges in schema public grant execute on functions to anon, authenticated;
 SQL
+}
+setup_db t
+P="$P -d t"
+
+# Selbstprüfende Ergebnisse (für die neuen Bedarf-Tests)
+FAILS=0
+expect () { # $1 = Name, $2 = erwarteter Teilstring, $3 = tatsächliche Ausgabe
+  if [[ "$3" == *"$2"* ]]; then echo "OK     $1"; else echo "FEHLER $1 (erwartet: '$2', bekommen: '$3')"; FAILS=$((FAILS+1)); fi
+}
+expect_eq () { # $1 = Name, $2 = genau erwartet, $3 = tatsächliche Ausgabe
+  if [[ "$3" == "$2" ]]; then echo "OK     $1"; else echo "FEHLER $1 (erwartet genau: '$2', bekommen: '$3')"; FAILS=$((FAILS+1)); fi
+}
+expect_not () { # $1 = Name, $2 = Teilstring, der NICHT vorkommen darf, $3 = Ausgabe
+  if [[ "$3" != *"$2"* ]]; then echo "OK     $1"; else echo "FEHLER $1 (darf nicht enthalten: '$2', bekommen: '$3')"; FAILS=$((FAILS+1)); fi
+}
 
 echo "--- Schema zweimal ausfuehren (muss wiederholbar sein)"
 $P -f "$(cd "$(dirname "$0")/.." && pwd)"/supabase/schema.sql
@@ -100,3 +114,78 @@ $P -c "delete from public.sites where name='Birkenweg'"
 $P -c "select count(*) from public.machines where site_id is not null and site_id not in (select id from public.sites)"
 echo "17) updated_at wird gesetzt (Erwartung: t)"
 $P -c "select updated_at > now() - interval '1 minute' from public.machines where name='Bagger 1'"
+
+
+# ---------------------------------------------------------------- Bedarf
+echo
+echo "=== Bedarf (needs) ==="
+U4=44444444-4444-4444-4444-444444444444   # zweiter freigegebener Mitarbeiter
+$P -c "insert into auth.users(id,email) values ('$U4','ma2@firma.test')"
+as_user $U1 "update public.profiles set approved=true where id='$U4';" >/dev/null
+SITE=$($P -c "select id from public.sites where name='Umfahrung Nord'")
+
+out=$(as_user $U3 "insert into public.needs(site_id,text,author) values ('$SITE','20 m³ Beton bis Mittwoch','Mitarbeiter') returning created_by='$U3';")
+expect "Freigegebener Mitarbeiter schreibt Bedarf (created_by = er selbst)" "t" "$(echo "$out" | tail -1)"
+NEED=$($P -c "select id from public.needs where text like '20 m³%'")
+
+out=$(as_user $U2 "insert into public.needs(site_id,text) values ('$SITE','Hack');")
+expect "Nicht freigegebene Person kann keinen Bedarf schreiben" "row-level security" "$out"
+out=$(as_user $U3 "insert into public.needs(site_id,text,created_by) values ('$SITE','Fremd','$U1');")
+expect "created_by kann nicht gefälscht werden" "row-level security" "$out"
+out=$(as_user $U3 "insert into public.needs(site_id,text) values ('$SITE','');")
+expect "Leerer Bedarf wird abgelehnt" "violates check constraint" "$out"
+LONG=$(printf 'x%.0s' $(seq 1 201))
+out=$(as_user $U3 "insert into public.needs(site_id,text) values ('$SITE','$LONG');")
+expect "Bedarf über 200 Zeichen wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.needs(site_id,text) values (gen_random_uuid(),'Ohne Baustelle');")
+expect "Bedarf braucht eine echte Baustelle" "foreign key" "$out"
+
+out=$(as_user $U2 "select count(*) from public.needs;")
+expect_eq "Nicht freigegebene Person sieht keinen Bedarf" "0" "$(echo "$out" | tail -1)"
+out=$(as_anon "select count(*) from public.needs;")
+expect "Nicht angemeldet: kein Zugriff auf Bedarf" "permission denied" "$out"
+out=$(as_user $U4 "select count(*) from public.needs;")
+expect_eq "Anderer Mitarbeiter sieht den Bedarf" "1" "$(echo "$out" | tail -1)"
+
+out=$(as_user $U4 "update public.needs set done=true, done_by='Mitarbeiter 2', done_at=now() where id='$NEED' returning done;")
+expect "Anderer Mitarbeiter darf abhaken" "t" "$(echo "$out" | tail -1)"
+out=$(as_user $U4 "update public.needs set text='Geändert' where id='$NEED' returning id;")
+expect "Mitarbeiter darf den Text eines Bedarfs nicht ändern" "nur von Admins" "$out"
+out=$(as_user $U4 "update public.needs set site_id=(select id from public.sites where name='Kanal Bahnhofstr.') where id='$NEED' returning id;")
+expect "Mitarbeiter darf den Bedarf nicht auf eine andere Baustelle verschieben" "nur von Admins" "$out"
+out=$(as_user $U1 "update public.needs set text='20 m³ Beton bis Donnerstag' where id='$NEED' returning text;")
+expect "Admin darf den Text ändern" "Donnerstag" "$out"
+
+out=$(as_user $U4 "delete from public.needs where id='$NEED' returning id;")
+expect_not "Fremder Mitarbeiter kann den Bedarf nicht löschen" "$NEED" "$out"
+out=$(as_user $U3 "delete from public.needs where id='$NEED' returning id;")
+expect "Schreiber löscht seinen eigenen Bedarf" "$NEED" "$out"
+
+$P -c "insert into public.needs(site_id,text,created_by) values ('$SITE','Absperrgitter','$U3'),('$SITE','Kies','$U3')" 
+out=$(as_user $U1 "delete from public.needs where text='Absperrgitter' returning text;")
+expect "Admin löscht fremden Bedarf" "Absperrgitter" "$out"
+$P -c "delete from public.sites where id='$SITE'"
+expect_eq "Beim Löschen der Baustelle verschwindet ihr Bedarf" "0" "$($P -c "select count(*) from public.needs where site_id='$SITE'")"
+
+# ---------------------------------------------------------------- Update einer bestehenden (alten) Datenbank
+echo
+echo "=== Update einer alten Datenbank (mit Prozent-Spalten) ==="
+setup_db t_alt
+PA="psql -h $D -p 5544 -U postgres -d t_alt -At -X -q"
+$PA -v ON_ERROR_STOP=1 -f "$ROOT/tests/schema_alt.sql" >/dev/null 2>&1
+$PA -v ON_ERROR_STOP=1 -f "$ROOT/tests/beispieldaten_alt.sql" >/dev/null 2>&1
+expect "Alte Datenbank: 5 Baustellen und 13 Maschinen vorhanden" "5 Baustellen, 13 Maschinen" "$($PA -c "select (select count(*) from sites)||' Baustellen, '||(select count(*) from machines)||' Maschinen'")"
+expect_eq "Alte Datenbank hat noch keine Tabelle needs" "t" "$($PA -c "select to_regclass('public.needs') is null")"
+out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
+expect_not "Update: neues schema.sql läuft ohne Fehler über die alte Datenbank" "ERROR" "$out"
+expect_eq "Update: Tabelle needs ist da" "t" "$($PA -c "select to_regclass('public.needs') is not null")"
+expect_eq "Update: alte Daten sind unverändert" "5 Baustellen, 13 Maschinen" "$($PA -c "select (select count(*) from sites)||' Baustellen, '||(select count(*) from machines)||' Maschinen'")"
+out=$($PA -c "insert into public.sites(name,sparte,lat,lng) values ('Ohne Prozent','tief',47.2,8.8) returning name;" 2>&1)
+expect "Update: Baustelle ohne Material-Spalten anlegen geht weiter" "Ohne Prozent" "$out"
+out=$($PA -c "insert into public.machines(name,sparte,status) values ('Ohne Tank','tief','off') returning name;" 2>&1)
+expect "Update: Maschine ohne Tank-Spalte anlegen geht weiter" "Ohne Tank" "$out"
+out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
+expect_not "Update: nochmals ausführen ist harmlos" "ERROR" "$out"
+
+echo
+if [ "$FAILS" -eq 0 ]; then echo "Bedarf- und Update-Tests: alle bestanden"; else echo "Bedarf- und Update-Tests: $FAILS FEHLER"; exit 1; fi
