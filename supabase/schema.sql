@@ -23,8 +23,6 @@ create table if not exists public.sites (
   id              uuid primary key default gen_random_uuid(),
   name            text not null check (length(trim(name)) > 0),
   sparte          text not null check (sparte in ('garten', 'strasse', 'tief')),
-  material_name   text not null default '',
-  material_level  numeric not null default 100 check (material_level between 0 and 100),
   lat             double precision not null check (lat between -90 and 90),
   lng             double precision not null check (lng between -180 and 180),
   created_by      uuid default auth.uid(),
@@ -38,7 +36,6 @@ create table if not exists public.machines (
   sparte      text not null check (sparte in ('garten', 'strasse', 'tief')),
   site_id     uuid references public.sites(id) on delete set null,
   status      text not null default 'off' check (status in ('running', 'waiting', 'broken', 'off')),
-  tank        numeric not null default 100 check (tank between 0 and 100),
   reason      text not null default '',
   created_by  uuid default auth.uid(),
   updated_at  timestamptz not null default now()

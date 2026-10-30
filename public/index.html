@@ -68,10 +68,7 @@
   .scene .stc.off{fill:var(--off)}
   .scene .mach.off{opacity:.6}
   .scene .mach.broken{animation:blink .8s infinite}
-  .mat{font-size:11px;color:var(--muted);margin-bottom:3px}
-  .bar{height:6px;background:#0b0f14;border-radius:3px;overflow:hidden}
-  .bar i{display:block;height:100%;background:var(--ok)}
-  .bar.low i{background:var(--wait)}
+  .info{font-size:11px;color:var(--muted);margin-top:2px}
 
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:16px}
   .panel h2{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
@@ -90,8 +87,6 @@
   .empty{color:var(--muted);font-size:13px}
   .log{font-size:12px;color:var(--muted);padding:3px 0}
   .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-  .levelrow{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px;flex-wrap:wrap}
-  .levelrow input{width:72px}
   #siteList{max-height:300px;overflow:auto;margin-top:8px}
   input,select{background:#0f1419;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;width:100%}
   input[type=number]{width:auto}
@@ -104,11 +99,11 @@
   .lm{background:none;border:0}
   .lm .site{position:static;transform:none;width:190px;left:auto!important;top:auto!important}
   #lmap.compact .site{width:auto;max-width:130px;padding:5px 7px}
-  #lmap.compact .site .mat,#lmap.compact .site .bar,#lmap.compact .site .scene{display:none}
+  #lmap.compact .site .info,#lmap.compact .site .scene{display:none}
   #lmap.compact .site .dots{display:flex;margin:4px 0 0}
   #lmap.compact .site.sel{width:190px;max-width:none;padding:8px}
   #lmap.compact .site.sel .scene{display:block}
-  #lmap.compact .site.sel .mat,#lmap.compact .site.sel .bar{display:block}
+  #lmap.compact .site.sel .info{display:block}
   #lmap.compact .site.sel .dots{display:none}
   #lmap .maplibregl-canvas{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.95) saturate(.7)}
   .maplibregl-ctrl-attrib{font-size:10px}
@@ -252,14 +247,13 @@ const SPARTEN = { garten:"Gartenbau", strasse:"Strassenbau", tief:"Tiefbau" };
 const TAG = { garten:"G", strasse:"S", tief:"T" };
 const LABEL = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Im Werkhof" };
 const SHORT = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Werkhof" };
-const MATERIALS = ["Humus","Asphalt","Kies","Beton","Pflanzen","Sand","Schotter","Rasen"];
 const TYPEN = ["Bagger","Minibagger","Dumper","Walze","Fertiger","LKW","Radlader","Teleskoplader","Rüttelplatte","Mäher"];
 
 const DEPOT = { id:"depot", name:"Werkhof", sparte:null, lat:CFG.depot.lat, lng:CFG.depot.lng };
 
 /* =============================================================== Zustand */
-let sites = [];        // { id, name, sparte, material:{name,level}, lat, lng, x?, y? }
-let machines = [];     // { id, name, typ, sparte, site (Baustellen-Id oder null), status, tank, reason }
+let sites = [];        // { id, name, sparte, lat, lng, x?, y? }
+let machines = [];     // { id, name, typ, sparte, site (Baustellen-Id oder null), status, reason }
 let selected = null;
 const filter = new Set();      // gewählte Sparten, leer = alle (Mehrfachauswahl)
 let incidents = 0;
@@ -275,22 +269,22 @@ let didOverview = false;
 /* =============================================================== Demo-Daten */
 function loadDemo(){
   sites = [
-    { id:"s1", name:"Birkenweg",         sparte:"garten",  material:{ name:"Humus",    level:80 }, x:16, y:24, lat:47.2300, lng:8.8420 },
-    { id:"s2", name:"Umfahrung Nord",    sparte:"strasse", material:{ name:"Asphalt",  level:70 }, x:55, y:18, lat:47.2560, lng:8.8480 },
-    { id:"s3", name:"Kanal Bahnhofstr.", sparte:"tief",    material:{ name:"Kies",     level:60 }, x:38, y:52, lat:47.2258, lng:8.8212 },
-    { id:"s4", name:"Park Seeblick",     sparte:"garten",  material:{ name:"Pflanzen", level:45 }, x:82, y:46, lat:47.2335, lng:8.8185 },
-    { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse", material:{ name:"Beton",    level:90 }, x:18, y:76, lat:47.2406, lng:8.9221 }
+    { id:"s1", name:"Birkenweg",         sparte:"garten",x:16, y:24, lat:47.2300, lng:8.8420 },
+    { id:"s2", name:"Umfahrung Nord",    sparte:"strasse",x:55, y:18, lat:47.2560, lng:8.8480 },
+    { id:"s3", name:"Kanal Bahnhofstr.", sparte:"tief",x:38, y:52, lat:47.2258, lng:8.8212 },
+    { id:"s4", name:"Park Seeblick",     sparte:"garten",x:82, y:46, lat:47.2335, lng:8.8185 },
+    { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse",x:18, y:76, lat:47.2406, lng:8.9221 }
   ];
-  const M = (id,name,typ,sparte,site,status,tank) => ({ id, name, typ, sparte, site, status, tank, reason:"" });
+  const M = (id,name,typ,sparte,site,status) => ({ id, name, typ, sparte, site, status, reason:"" });
   machines = [
-    M(1,"Bagger 1","Bagger","tief","s3","running",80), M(2,"Minibagger 1","Minibagger","tief","s3","running",60),
-    M(3,"Dumper 1","Dumper","tief","s3","running",90), M(4,"Walze 1","Walze","strasse","s2","running",70),
-    M(5,"Fertiger 1","Fertiger","strasse","s2","running",85), M(6,"LKW 1","LKW","strasse","s2","running",50),
-    M(7,"Radlader 1","Radlader","strasse","s5","running",75), M(8,"Rüttelplatte","Rüttelplatte","strasse","s5","running",65),
-    M(9,"Minibagger 2","Minibagger","garten","s1","running",80), M(10,"Dumper 2","Dumper","garten","s1","running",55),
-    M(11,"Radlader 2","Radlader","garten","s4","running",90), M(12,"Aufsitzmäher","Mäher","garten","s4","running",70),
-    M(13,"Bagger 2","Bagger","tief",null,"off",100), M(14,"LKW 2","LKW","strasse",null,"off",100),
-    M(15,"Teleskoplader","Teleskoplader","garten",null,"off",100)
+    M(1,"Bagger 1","Bagger","tief","s3","running"), M(2,"Minibagger 1","Minibagger","tief","s3","running"),
+    M(3,"Dumper 1","Dumper","tief","s3","running"), M(4,"Walze 1","Walze","strasse","s2","running"),
+    M(5,"Fertiger 1","Fertiger","strasse","s2","running"), M(6,"LKW 1","LKW","strasse","s2","running"),
+    M(7,"Radlader 1","Radlader","strasse","s5","running"), M(8,"Rüttelplatte","Rüttelplatte","strasse","s5","running"),
+    M(9,"Minibagger 2","Minibagger","garten","s1","running"), M(10,"Dumper 2","Dumper","garten","s1","running"),
+    M(11,"Radlader 2","Radlader","garten","s4","running"), M(12,"Aufsitzmäher","Mäher","garten","s4","running"),
+    M(13,"Bagger 2","Bagger","tief",null,"off"), M(14,"LKW 2","LKW","strasse",null,"off"),
+    M(15,"Teleskoplader","Teleskoplader","garten",null,"off")
   ];
   selected = "s3";
   DEPOT.x = 62; DEPOT.y = 84;   // feste Position des Werkhofs auf der Skizze
@@ -315,7 +309,7 @@ const timeStr = d => new Date(d).toLocaleTimeString("de-CH", { hour:"2-digit", m
 function siteStatus(s){
   const ms = machines.filter(m => m.site === s.id);
   if(ms.some(m => m.status === "broken")) return "broken";
-  if(s.material.level <= 15 || ms.some(m => m.status === "waiting")) return "waiting";
+  if(ms.some(m => m.status === "waiting")) return "waiting";
   if(ms.some(m => m.status === "running")) return "running";
   return "off";
 }
@@ -366,7 +360,6 @@ async function dbMachine(m, patch){
   const row = {};
   if("status" in patch) row.status = patch.status;
   if("reason" in patch) row.reason = patch.reason;
-  if("tank" in patch) row.tank = patch.tank;
   if("site" in patch) row.site_id = patch.site;
   const r = await sb.from("machines").update(row).eq("id", m.id);
   if(r.error){ toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll(); }
@@ -381,33 +374,25 @@ function setMachine(m, patch, logText){
   if(LIVE) dbMachine(m, patch);
 }
 
-// Setzt den Füllstand. Reicht das Material wieder, laufen die wartenden Maschinen der Baustelle weiter.
-async function setSiteLevel(s, level, logText){
-  s.material.level = level;
+// Material ist da: alle Maschinen der Baustelle, die auf Material warten, laufen weiter.
+async function materialDelivered(s){
   let released = false;
-  if(level > 15){
-    machines.forEach(x=>{
-      if(x.site === s.id && x.status === "waiting" && x.reason.indexOf("Material") === 0){ x.status = "running"; x.reason = ""; released = true; }
-    });
-  }
-  if(logText) addLog(logText);
+  machines.forEach(x=>{
+    if(x.site === s.id && x.status === "waiting" && x.reason.indexOf("Material") === 0){ x.status = "running"; x.reason = ""; released = true; }
+  });
+  addLog("Material nachgeliefert (" + s.name + ")");
   render();
-  if(LIVE){
-    const r = await sb.from("sites").update({ material_level: level }).eq("id", s.id);
-    if(r.error){ toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll(); return; }
-    if(released){
-      const u = await sb.from("machines").update({ status:"running", reason:"" })
-        .eq("site_id", s.id).eq("status", "waiting").like("reason", "Material%");
-      if(u.error){ toast("Speichern fehlgeschlagen: " + u.error.message, true); loadAll(); }
-    }
+  if(LIVE && released){
+    const u = await sb.from("machines").update({ status:"running", reason:"" })
+      .eq("site_id", s.id).eq("status", "waiting").like("reason", "Material%");
+    if(u.error){ toast("Speichern fehlgeschlagen: " + u.error.message, true); loadAll(); }
   }
 }
 
 function report(m, kind){
-  const s = siteOf(m);
   if(kind === "broken") setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m));
-  if(kind === "material") setMachine(m, { status:"waiting", reason:"Material fehlt: " + ((s && s.material.name) || "Material") }, m.name + ": Material fehlt" + where(m));
-  if(kind === "diesel") setMachine(m, { status:"waiting", reason:"Diesel leer", tank:Math.min(m.tank, 10) }, m.name + ": Diesel leer" + where(m));
+  if(kind === "material") setMachine(m, { status:"waiting", reason:"Material fehlt" }, m.name + ": Material fehlt" + where(m));
+  if(kind === "diesel") setMachine(m, { status:"waiting", reason:"Diesel fehlt" }, m.name + ": Diesel fehlt" + where(m));
 }
 
 function resolve(m){
@@ -416,10 +401,9 @@ function resolve(m){
   } else if(m.status === "waiting"){
     if(m.reason.indexOf("Material") === 0){
       const s = siteOf(m);
-      if(!s) return;
-      setSiteLevel(s, 100, (s.material.name || "Material") + " nachgeliefert (" + s.name + ")");
+      if(s) materialDelivered(s);
     } else {
-      setMachine(m, { tank:100, status:"running", reason:"" }, m.name + " getankt" + where(m));
+      setMachine(m, { status:"running", reason:"" }, m.name + " getankt" + where(m));
     }
   }
 }
@@ -431,8 +415,8 @@ function deploy(m, siteId){
 }
 
 /* =============================================================== Daten: Anlegen und Löschen */
-const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, material:{ name:r.material_name || "", level:Number(r.material_level) }, lat:r.lat, lng:r.lng });
-const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, tank:Number(r.tank), reason:r.reason || "" });
+const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, lat:r.lat, lng:r.lng });
+const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "" });
 
 function upsertSite(s){
   const i = sites.findIndex(x => x.id === s.id);
@@ -445,11 +429,11 @@ function upsertMachine(m){
 
 async function createSite(v){
   if(!LIVE){
-    const s = { id:"n" + (++localId), name:v.name, sparte:v.sparte, material:{ name:v.mat, level:v.level }, lat:v.lat, lng:v.lng };
+    const s = { id:"n" + (++localId), name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng };
     sites.push(s); selectSite(s.id); addLog("Neue Baustelle: " + s.name);
     return true;
   }
-  const r = await sb.from("sites").insert({ name:v.name, sparte:v.sparte, material_name:v.mat, material_level:v.level, lat:v.lat, lng:v.lng }).select().single();
+  const r = await sb.from("sites").insert({ name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng }).select().single();
   if(r.error){ toast("Baustelle konnte nicht gespeichert werden: " + r.error.message, true); return false; }
   upsertSite(mapSite(r.data)); selectSite(r.data.id); addLog("Neue Baustelle: " + r.data.name);
   return true;
@@ -458,11 +442,11 @@ async function createSite(v){
 async function createMachine(v){
   const status = v.site ? "running" : "off";
   if(!LIVE){
-    machines.push({ id:"n" + (++localId), name:v.name, typ:v.typ, sparte:v.sparte, site:v.site, status, tank:100, reason:"" });
+    machines.push({ id:"n" + (++localId), name:v.name, typ:v.typ, sparte:v.sparte, site:v.site, status, reason:"" });
     addLog("Neue Maschine: " + v.name); render();
     return true;
   }
-  const r = await sb.from("machines").insert({ name:v.name, typ:v.typ, sparte:v.sparte, site_id:v.site, status, tank:100 }).select().single();
+  const r = await sb.from("machines").insert({ name:v.name, typ:v.typ, sparte:v.sparte, site_id:v.site, status }).select().single();
   if(r.error){ toast("Maschine konnte nicht gespeichert werden: " + r.error.message, true); return false; }
   upsertMachine(mapMachine(r.data)); addLog("Neue Maschine: " + r.data.name); render();
   return true;
@@ -512,7 +496,7 @@ function confirmBtn(label, key, onConfirm){
 
 /* =============================================================== Baustellen-Szene (SVG)
    Kleine Szene je Baustelle: Untergrund nach Sparte, Maschinen als Silhouetten nach Art,
-   Materialhaufen nach echtem Füllstand. Der Status steht weiterhin nur in den Status-Farben
+   Der Status steht nur in den Status-Farben
    (Punkt an der Maschine, blinkend bei Defekt). Silhouetten und Untergrund sind neutral.
    Benutzereingaben (Maschinenart, Name) dienen nur zur Auswahl bzw. landen per textContent im Tooltip. */
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -610,25 +594,6 @@ function drawGround(svg, kind, kinds){
   }
 }
 
-function drawPile(svg, material){
-  if(!material) return;
-  const n = (material.name || "").toLowerCase();
-  const f = Math.max(0, Math.min(1, (Number(material.level) || 0) / 100));
-  if(n.includes("pflanz")){
-    const pots = Math.round(6 * f);
-    for(let i = 0; i < Math.max(pots, 1); i++){
-      const x = 142 + i * 7;
-      svg.appendChild(svR(x, 50, 5, 6, "#8b5e3c", 1));
-      if(i < pots) svg.appendChild(svC(x + 2.5, 47, 3.6, "#5f9d5b"));
-    }
-    return;
-  }
-  const col = n.includes("humus") || n.includes("erde") ? "#4a3524" : n.includes("asphalt") ? "#1d2024" : n.includes("kies") ? "#a79c88"
-    : n.includes("beton") ? "#aeb4bb" : n.includes("sand") ? "#c9b27c" : n.includes("schotter") ? "#8b9097" : n.includes("rasen") ? "#4f8a4a" : "#8a7f6f";
-  const w = 10 + 34 * f, h = 2 + 20 * f, cx = 160, by = 56;
-  svg.appendChild(svP((cx - w / 2) + "," + by + " " + (cx - w * 0.22) + "," + (by - h) + " " + (cx + w * 0.22) + "," + (by - h * 0.92) + " " + (cx + w / 2) + "," + by, col));
-}
-
 function buildScene(s, ms, isDepot){
   const sorted = ms.slice().sort((a, b) => RANK[a.status] - RANK[b.status]);   // Schlechteste zuerst, die bleiben sichtbar
   const over = sorted.length > SCENE_MAX;
@@ -636,15 +601,13 @@ function buildScene(s, ms, isDepot){
   const hidden = over ? sorted.slice(SCENE_MAX - 1) : [];
   const kinds = new Set(sorted.map(m => machKind(m.typ)));
   const ground = isDepot ? "hof" : (s.sparte === "strasse" || s.sparte === "garten") ? s.sparte : "tief";
-  const mat = isDepot ? null : s.material;
-  const key = [ground, mat ? mat.name : "", mat ? Math.round(mat.level) : "", kinds.has("walze") || kinds.has("fertiger") ? 1 : 0,
+  const key = [ground, kinds.has("walze") || kinds.has("fertiger") ? 1 : 0,
     kinds.has("maeher") ? 1 : 0, kinds.has("bagger") || kinds.has("mini") ? 1 : 0,
     shown.map(m => [m.typ, m.status, m.name].join("|")).join(";"), hidden.length, hidden.length ? hidden[0].status : ""].join("#");
   if(scenePool.has(key)) return scenePool.get(key).cloneNode(true);
 
   const svg = sv("svg", { viewBox:"0 0 " + SCENE_W + " " + SCENE_H, class:"scene", "aria-hidden":"true" });
   drawGround(svg, ground, kinds);
-  if(mat) drawPile(svg, mat);
   svg.appendChild(sv("line", { x1:0, y1:5, x2:SCENE_W, y2:5, stroke:"#9aa3ad", "stroke-width":1 }));                       // Bauzaun
   svg.appendChild(sv("line", { x1:3, y1:5, x2:SCENE_W, y2:5, stroke:"#9aa3ad", "stroke-width":6, "stroke-dasharray":"1.2 11" }));
 
@@ -698,17 +661,7 @@ function marker(s, isDepot){
   ms.slice(0, 24).forEach(m => dots.appendChild(el("span", "dot " + m.status)));
   d.appendChild(dots);
 
-  if(s.material){
-    const low = s.material.level <= 15;
-    d.appendChild(el("div", "mat", (s.material.name || "Material") + " " + Math.round(s.material.level) + "%" + (low ? " – fehlt!" : "")));
-    const bar = el("div", "bar" + (low ? " low" : ""));
-    const i = el("i");
-    i.style.width = Math.round(s.material.level) + "%";
-    bar.appendChild(i);
-    d.appendChild(bar);
-  } else {
-    d.appendChild(el("div", "mat", ms.length + " Maschinen"));
-  }
+  d.appendChild(el("div", "info", ms.length === 1 ? "1 Maschine" : ms.length + " Maschinen"));
   d.onclick = ()=>selectSite(s.id);
   return d;
 }
@@ -732,33 +685,6 @@ function renderDetail(){
   if(s.sparte) head.appendChild(el("span", "muted", SPARTEN[s.sparte]));
   box.appendChild(head);
 
-  if(s.material){
-    const low = s.material.level <= 15;
-    box.appendChild(el("div", "muted", "Material: " + (s.material.name || "–") + " " + Math.round(s.material.level) + "%"));
-    const bar = el("div", "bar" + (low ? " low" : ""));
-    const i = el("i");
-    i.style.width = Math.round(s.material.level) + "%";
-    bar.appendChild(i);
-    box.appendChild(bar);
-
-    const lr = el("div", "levelrow");
-    lr.appendChild(el("span", "muted", "Füllstand setzen:"));
-    const inp = el("input"); inp.type = "number"; inp.min = "0"; inp.max = "100"; inp.step = "5";
-    inp.value = String(Math.round(s.material.level)); inp.id = "levelInput";
-    inp.setAttribute("aria-label", "Material-Füllstand in Prozent");
-    inp.onchange = ()=>{
-      const v = Math.max(0, Math.min(100, Number(inp.value)));
-      inp.blur();
-      if(!isFinite(v)) return;
-      setSiteLevel(s, v, "Füllstand " + (s.material.name || "Material") + " " + v + "% (" + s.name + ")");
-    };
-    lr.appendChild(inp);
-    const full = el("button", "", "Nachgeliefert (100%)");
-    full.onclick = ()=>setSiteLevel(s, 100, (s.material.name || "Material") + " nachgeliefert (" + s.name + ")");
-    lr.appendChild(full);
-    box.appendChild(lr);
-  }
-
   const list = machines.filter(m => loc(m) === s.id);
   if(!list.length) box.appendChild(el("div", "empty", "Keine Maschinen hier."));
   list.forEach(m=>{
@@ -767,14 +693,14 @@ function renderDetail(){
     const t = el("div", "mtxt");
     t.appendChild(el("div", "mname", m.name));
     const state = m.status === "waiting" ? m.reason : LABEL[m.status];
-    t.appendChild(el("div", "muted", (m.typ ? m.typ + " · " : "") + state + " · Diesel " + Math.round(m.tank) + "%"));
+    t.appendChild(el("div", "muted", (m.typ ? m.typ + " · " : "") + state));
     r.appendChild(t);
     const acts = el("div", "acts");
     const add = (label, fn, cls)=>{ const b = el("button", cls || "", label); b.onclick = fn; acts.appendChild(b); };
     if(m.status === "running"){
       add("Defekt", ()=>report(m, "broken"));
       add("Material fehlt", ()=>report(m, "material"));
-      add("Diesel leer", ()=>report(m, "diesel"));
+      add("Diesel fehlt", ()=>report(m, "diesel"));
     } else if(m.status === "broken"){
       add("Repariert", ()=>resolve(m));
     } else if(m.status === "waiting"){
@@ -1048,19 +974,14 @@ async function searchAddress(q){
 }
 
 function modalSite(draft){
-  draft = draft || { name:"", sparte:"tief", mat:"", level:"100", lat:"", lng:"" };
+  draft = draft || { name:"", sparte:"tief", lat:"", lng:"" };
   const body = el("div", "form");
   const name = input("text", draft.name, "f-name"); name.maxLength = 80;
   const sparte = select([["garten","Gartenbau"],["strasse","Strassenbau"],["tief","Tiefbau"]], draft.sparte, "f-sparte");
-  const mat = input("text", draft.mat, "f-mat"); mat.setAttribute("list", "dl-mat"); mat.maxLength = 40;
-  const level = input("number", draft.level, "f-level"); level.min = "0"; level.max = "100"; level.style.width = "100%";
   const lat = input("text", draft.lat, "f-lat"); lat.inputMode = "decimal";
   const lng = input("text", draft.lng, "f-lng"); lng.inputMode = "decimal";
   body.appendChild(field("Name der Baustelle", name));
   body.appendChild(field("Sparte", sparte));
-  const r1 = el("div", "row2");
-  r1.appendChild(field("Hauptmaterial", mat)); r1.appendChild(field("Füllstand in %", level));
-  body.appendChild(r1); body.appendChild(datalist("dl-mat", MATERIALS));
 
   body.appendChild(el("div", "sub", "Ort"));
   const addr = input("search", "", "f-addr"); addr.placeholder = "Adresse oder Ort suchen";
@@ -1093,7 +1014,7 @@ function modalSite(draft){
   r2.appendChild(field("Breitengrad", lat)); r2.appendChild(field("Längengrad", lng));
   body.appendChild(r2);
 
-  const collect = ()=>({ name:name.value, sparte:sparte.value, mat:mat.value, level:level.value, lat:lat.value, lng:lng.value });
+  const collect = ()=>({ name:name.value, sparte:sparte.value, lat:lat.value, lng:lng.value });
   if(lmap && mapReady){
     const pick = el("button", "", "Ort auf der Karte wählen"); pick.type = "button";
     pick.onclick = ()=>{
@@ -1113,15 +1034,13 @@ function modalSite(draft){
     const v = collect();
     const nm = v.name.trim();
     const la = Number(String(v.lat).replace(",", ".")), ln = Number(String(v.lng).replace(",", "."));
-    const lv = Number(v.level);
     msg.className = "msg err";
     if(!nm){ msg.textContent = "Bitte einen Namen eingeben."; return; }
     if(String(v.lat).trim() === "" || String(v.lng).trim() === "" || !isFinite(la) || !isFinite(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180){
       msg.textContent = "Bitte einen gültigen Ort wählen (Adresse suchen, Karte antippen oder Koordinaten eintragen)."; return;
     }
-    if(!isFinite(lv) || lv < 0 || lv > 100){ msg.textContent = "Der Füllstand muss zwischen 0 und 100 liegen."; return; }
     save.disabled = true;
-    const ok = await createSite({ name:nm, sparte:v.sparte, mat:v.mat.trim(), level:lv, lat:la, lng:ln });
+    const ok = await createSite({ name:nm, sparte:v.sparte, lat:la, lng:ln });
     save.disabled = false;
     if(ok) closeModal();
   };
@@ -1346,17 +1265,13 @@ async function startLive(){
 
 /* =============================================================== Demo: Simulation */
 function tick(){
-  sites.forEach(s=>{
-    const r = machines.filter(m => m.site === s.id && m.status === "running").length;
-    s.material.level = Math.max(0, s.material.level - r * (0.5 + Math.random() * 0.8));
-  });
+  // Nur zur Vorführung: ab und zu fällt eine Maschine aus oder wartet auf Material oder Diesel.
   machines.forEach(m=>{
-    if(m.status !== "running") return;
-    const s = siteOf(m);
-    m.tank = Math.max(0, m.tank - (1 + Math.random() * 2));
-    if(s && s.material.level <= 15) setMachine(m, { status:"waiting", reason:"Material fehlt: " + s.material.name }, m.name + ": Material fehlt" + where(m));
-    else if(m.tank <= 15) setMachine(m, { status:"waiting", reason:"Diesel leer" }, m.name + ": Diesel leer" + where(m));
-    else if(Math.random() < 0.004) setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m));
+    if(m.status !== "running" || !m.site) return;
+    const r = Math.random();
+    if(r < 0.003) setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m));
+    else if(r < 0.006) setMachine(m, { status:"waiting", reason:"Material fehlt" }, m.name + ": Material fehlt" + where(m));
+    else if(r < 0.008) setMachine(m, { status:"waiting", reason:"Diesel fehlt" }, m.name + ": Diesel fehlt" + where(m));
   });
   softRender();
 }

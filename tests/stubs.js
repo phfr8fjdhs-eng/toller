@@ -64,7 +64,7 @@
       let rows = T.filter(r => canRead(r) && this.fl.every(f => f(r)));
       if(this.op === "insert"){
         if(isProf || !approved()) return { data:null, error:rls };
-        const row = Object.assign({ id:this.t === "activity" ? db.seq++ : nid(), created_at:new Date().toISOString() }, this.t === "machines" ? { typ:"", status:"off", tank:100, reason:"", site_id:null } : {}, this.t === "sites" ? { material_name:"", material_level:100 } : {}, this.row);
+        const row = Object.assign({ id:this.t === "activity" ? db.seq++ : nid(), created_at:new Date().toISOString() }, this.t === "machines" ? { typ:"", status:"off", reason:"", site_id:null } : {}, this.row);
         T.push(row); emit(this.t, "INSERT", row);
         return this.sel ? { data:this.one ? row : [row], error:null } : { data:null, error:null };
       }

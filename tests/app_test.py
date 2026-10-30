@@ -55,7 +55,7 @@ with sync_playwright() as p:
     check("Demo: Stoerung wird einmal gezaehlt", d.evaluate("incidents") == 1, str(d.evaluate("incidents")))
     check("Demo: kein Ton-Knopf und kein Audio", d.locator("#soundBtn").count() == 0 and d.evaluate("window.__audio") == 0)
     d.click("#addSiteBtn")
-    d.fill("#f-name", "Testbaustelle"); d.select_option("#f-sparte", "garten"); d.fill("#f-mat", "Humus")
+    d.fill("#f-name", "Testbaustelle"); d.select_option("#f-sparte", "garten")
     d.fill("#f-lat", "47.24"); d.fill("#f-lng", "8.83")
     d.click("text=Baustelle speichern")
     check("Demo: neue Baustelle in Liste", d.locator("#siteList .item", has_text="Testbaustelle").count() == 1)
@@ -75,8 +75,8 @@ with sync_playwright() as p:
     check("Szene: Werkhof zeigt seine Maschinen gedimmt", d.locator("#lmap .lm .site.depot .mach.off").count() == 3)
     check("Szene: Stoerung -> eine Maschine blinkt rot", d.locator("#lmap .lm .site .mach.broken").count() >= 1 and d.locator("#lmap .lm .site .mach.broken").count() == d.locator("#lmap .lm .site .mach.broken .stc.broken").count())
     d.evaluate("""(()=>{
-      for(let i=0;i<7;i++) machines.push({id:'x'+i,name:'Extra '+i,typ:'Dumper',sparte:'garten',site:'s1',status:'running',tank:80,reason:''});
-      machines.push({id:'xw',name:'Wartend',typ:'Mäher',sparte:'garten',site:'s1',status:'waiting',tank:80,reason:'Material fehlt'});
+      for(let i=0;i<7;i++) machines.push({id:'x'+i,name:'Extra '+i,typ:'Dumper',sparte:'garten',site:'s1',status:'running',reason:''});
+      machines.push({id:'xw',name:'Wartend',typ:'Mäher',sparte:'garten',site:'s1',status:'waiting',reason:'Material fehlt'});
       render();
     })()""")
     birke = d.locator("#lmap .lm .site", has_text="Birkenweg")
@@ -109,7 +109,7 @@ with sync_playwright() as p:
 
     # Baustelle ueber Adresssuche
     pg.click("#addSiteBtn")
-    pg.fill("#f-name", "Kanal Jona"); pg.select_option("#f-sparte", "tief"); pg.fill("#f-mat", "Kies"); pg.fill("#f-level", "60")
+    pg.fill("#f-name", "Kanal Jona"); pg.select_option("#f-sparte", "tief")
     pg.fill("#f-addr", "Bahnhofstrasse Jona"); pg.click("#modal >> text=Suchen"); pg.wait_for_timeout(300)
     check("Live: Adresssuche zeigt Treffer ohne HTML-Tags", pg.locator("#modal .results button").count() == 1 and "<b>" not in pg.inner_text("#modal .results"))
     pg.click("#modal .results button")
@@ -154,14 +154,22 @@ with sync_playwright() as p:
     pg.click("#detail >> text=Material fehlt"); pg.wait_for_timeout(200)
     check("Live: Material fehlt wartet", pg.evaluate("window.__db.machines[0].status") == "waiting" and "Material" in pg.evaluate("window.__db.machines[0].reason"))
     pg.click("#detail .mrow >> text=Nachgeliefert"); pg.wait_for_timeout(300)
-    check("Live: Nachgeliefert -> laeuft, Material 100", pg.evaluate("window.__db.machines[0].status") == "running" and pg.evaluate("window.__db.sites.find(s=>s.name=='Kanal Jona').material_level") == 100)
+    check("Live: Nachgeliefert -> laeuft wieder", pg.evaluate("window.__db.machines[0].status") == "running" and pg.evaluate("window.__db.machines[0].reason") == "")
 
-    pg.click("#detail .mrow >> text=Material fehlt"); pg.wait_for_timeout(200)
-    pg.fill("#levelInput", "80"); pg.press("#levelInput", "Tab"); pg.wait_for_timeout(400)
-    check("Live: Fuellstand per Eingabe gibt wartende Maschine frei", pg.evaluate("window.__db.machines[0].status") == "running" and pg.evaluate("window.__db.sites.find(s=>s.name=='Kanal Jona').material_level") == 80)
-    pg.click("#detail .mrow >> text=Material fehlt"); pg.wait_for_timeout(200)
-    pg.click("#detail >> text=Nachgeliefert (100%)"); pg.wait_for_timeout(400)
-    check("Live: Knopf 'Nachgeliefert (100%)' gibt wartende Maschine frei", pg.evaluate("window.__db.machines[0].status") == "running" and pg.evaluate("window.__db.sites.find(s=>s.name=='Kanal Jona').material_level") == 100)
+    check("Live: keine Prozent-Anzeige fuer Material oder Diesel", "%" not in pg.inner_text("#detail") and pg.locator("#levelInput").count() == 0)
+    pg.click("#detail .mrow >> text=Diesel fehlt"); pg.wait_for_timeout(300)
+    check("Live: Diesel fehlt wartet", pg.evaluate("window.__db.machines[0].status") == "waiting" and pg.evaluate("window.__db.machines[0].reason") == "Diesel fehlt")
+    pg.click("#detail .mrow >> text=Getankt"); pg.wait_for_timeout(300)
+    check("Live: Getankt -> laeuft wieder", pg.evaluate("window.__db.machines[0].status") == "running")
+
+    # Zwei Maschinen warten auf Material: ein Tipp auf Nachgeliefert gibt die ganze Baustelle frei
+    pg.click("#addMachineBtn"); pg.fill("#m-name", "Bagger B"); pg.fill("#m-typ", "Minibagger")
+    pg.click("text=Maschine speichern"); pg.wait_for_timeout(300)
+    pg.click('#detail .mrow button:has-text("Material fehlt") >> nth=0'); pg.wait_for_timeout(200)
+    pg.click('#detail .mrow button:has-text("Material fehlt") >> nth=0'); pg.wait_for_timeout(200)
+    check("Live: zwei Maschinen warten auf Material", sum(1 for m in pg.evaluate("window.__db.machines") if m["status"] == "waiting") == 2)
+    pg.click('#detail .mrow button:has-text("Nachgeliefert") >> nth=0'); pg.wait_for_timeout(400)
+    check("Live: Nachgeliefert gibt alle wartenden Maschinen der Baustelle frei", all(m["status"] == "running" for m in pg.evaluate("window.__db.machines")))
 
     # Stoerung von einem anderen Handy (Echtzeit)
     b1 = pg.evaluate("incidents")
@@ -171,7 +179,7 @@ with sync_playwright() as p:
     check("Live: fremde Stoerung wird gezaehlt, ohne Ton", pg.evaluate("incidents") - b1 == 1 and pg.evaluate("window.__audio") == 0)
     pg.evaluate("(()=>{const m=window.__db.machines[0];const old=Object.assign({},m);m.status='running';window.__db.emit('machines','UPDATE',m,old);})()")
     # Neue Baustelle von einem anderen Handy erscheint
-    pg.evaluate("(()=>{const r={id:'remote1',name:'Fremde Baustelle',sparte:'strasse',material_name:'Asphalt',material_level:50,lat:47.3,lng:8.9};window.__db.sites.push(r);window.__db.emit('sites','INSERT',r);})()")
+    pg.evaluate("(()=>{const r={id:'remote1',name:'Fremde Baustelle',sparte:'strasse',lat:47.3,lng:8.9};window.__db.sites.push(r);window.__db.emit('sites','INSERT',r);})()")
     pg.wait_for_timeout(300)
     check("Live: fremde Baustelle erscheint", pg.locator("#siteList .item", has_text="Fremde Baustelle").count() == 1)
 
@@ -224,7 +232,7 @@ with sync_playwright() as p:
     mob.goto(URL); mob.wait_for_timeout(500)
     mob.fill("#aMail", "chef@firma.test"); mob.fill("#aPass", "x")
     check("Handy: Login ohne seitliches Scrollen", not mob.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
-    mob.evaluate("window.__db.users['chef@firma.test']={id:'u1',email:'chef@firma.test',password:'langes-passwort'};window.__db.profiles.push({id:'u1',email:'chef@firma.test',name:'Chef',role:'admin',approved:true});window.__db.sites.push({id:'a',name:'Testweg',sparte:'tief',material_name:'Kies',material_level:70,lat:47.23,lng:8.83});window.__db.machines.push({id:'m',name:'Bagger',typ:'Bagger',sparte:'tief',site_id:'a',status:'running',tank:80,reason:''});")
+    mob.evaluate("window.__db.users['chef@firma.test']={id:'u1',email:'chef@firma.test',password:'langes-passwort'};window.__db.profiles.push({id:'u1',email:'chef@firma.test',name:'Chef',role:'admin',approved:true});window.__db.sites.push({id:'a',name:'Testweg',sparte:'tief',lat:47.23,lng:8.83});window.__db.machines.push({id:'m',name:'Bagger',typ:'Bagger',sparte:'tief',site_id:'a',status:'running',reason:''});")
     mob.fill("#aPass", "langes-passwort"); mob.click("#authGo"); mob.wait_for_timeout(600)
     check("Handy: Dashboard ohne seitliches Scrollen", not mob.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
     mob.click("#addSiteBtn")

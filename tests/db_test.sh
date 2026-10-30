@@ -4,6 +4,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 set -e
 BIN=/usr/lib/postgresql/16/bin
 D=/tmp/pgtest
+# Einen noch laufenden Test-Server von früher stoppen und beim Beenden immer aufräumen
+su postgres -c "$BIN/pg_ctl -D $D/data stop -m fast" >/dev/null 2>&1 || true
+trap 'su postgres -c "$BIN/pg_ctl -D $D/data stop -m fast" >/dev/null 2>&1 || true' EXIT
 rm -rf $D && mkdir -p $D && chown postgres $D
 su postgres -c "$BIN/initdb -D $D/data -A trust >/dev/null"
 su postgres -c "$BIN/pg_ctl -D $D/data -o '-p 5544 -k $D' -l $D/log -w start >/dev/null"
@@ -75,7 +78,7 @@ as_user $U1 "update public.profiles set approved=true where id='$U3' returning n
 
 echo "9) Freigegebener Mitarbeiter sieht 5 Baustellen und legt eine an (Erwartung: 5, dann INSERT-Zeile)"
 as_user $U3 "select count(*) from public.sites;"
-as_user $U3 "insert into public.sites(name,sparte,material_name,lat,lng) values ('Neue Baustelle','garten','Kies',47.2,8.8) returning created_by='$U3';"
+as_user $U3 "insert into public.sites(name,sparte,lat,lng) values ('Neue Baustelle','garten',47.2,8.8) returning created_by='$U3';"
 echo "10) Mitarbeiter aendert Maschinenstatus (Erwartung: 1 Zeile, Status broken)"
 as_user $U3 "update public.machines set status='broken', reason='' where name='Bagger 1' returning status;"
 echo "11) Mitarbeiter loescht Baustelle (Erwartung: 0 Zeilen, nicht erlaubt)"
