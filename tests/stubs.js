@@ -62,7 +62,7 @@
   window.__mapClick = function(lat, lng){ (handlers.click || []).forEach(cb => cb({ lngLat:{ lat, lng } })); };
 
   // ---- Supabase
-  const db = window.__db = { sites:[], machines:[], needs:[], activity:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null };
+  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null };
   const nid = () => "id" + (db.seq++);
   const me = () => db.session ? db.profiles.find(p => p.id === db.session.user.id) : null;
   const approved = () => { const m = me(); return !!(m && m.approved); };
@@ -72,6 +72,13 @@
       .forEach(h => h.cb({ eventType:type, new:nw || {}, old:old || {} }));
   }
   db.emit = emit;
+
+  // Wie der Trigger machines_stamp: Absender und Zeit setzt die Datenbank, nie die Seite
+  function stamp(r, old){
+    if(old && r.status === old.status && r.reason === old.reason){ r.reported_by = old.reported_by; r.reported_name = old.reported_name; r.reported_at = old.reported_at; return; }
+    if(r.status === "waiting" || r.status === "broken"){ r.reported_by = (me() || {}).id; r.reported_name = (me() || {}).name || ""; r.reported_at = new Date().toISOString(); }
+    else { r.reported_by = null; r.reported_name = ""; r.reported_at = null; }
+  }
 
   function Q(t){ this.t = t; this.op = "select"; this.fl = []; this.row = null; this.one = false; this.maybe = false; this.sel = false; this.ord = null; this.lim = null; }
   Q.prototype = {
@@ -96,16 +103,24 @@
       if(this.op === "insert"){
         if(isProf || !approved()) return { data:null, error:rls };
         const row = Object.assign({ id:this.t === "activity" ? db.seq++ : nid(), created_at:new Date().toISOString() }, this.t === "machines" ? { typ:"", status:"off", reason:"", site_id:null } : {}, this.t === "needs" ? { author:"", done:false, done_by:"", done_at:null, created_by:(me() || {}).id } : {}, this.row);
+        if(this.t === "materials"){                                         // wie der Trigger materials_stamp und der eindeutige Index
+          row.name = String(row.name || "").replace(/\s+/g, " ").trim();
+          row.author = me().name; row.created_by = me().id;
+          if(row.name.length < 2 || row.name.length > 60) return { data:null, error:{ message:"violates check constraint" } };
+          if(T.some(x => x.name.toLowerCase() === row.name.toLowerCase())) return { data:null, error:{ code:"23505", message:"duplicate key value violates unique constraint" } };
+        }
+        if(this.t === "machines") stamp(row, null);
         T.push(row); emit(this.t, "INSERT", row);
         return this.sel ? { data:this.one ? row : [row], error:null } : { data:null, error:null };
       }
       if(this.op === "update"){
         if(isProf ? !admin() : !approved()) return { data:[], error:null };
-        rows.forEach(r => { const old = Object.assign({}, r); Object.assign(r, this.row); emit(this.t, "UPDATE", r, old); });
+        if(this.t === "materials") return { data:[], error:null };           // Materialien lassen sich nicht aendern
+        rows.forEach(r => { const old = Object.assign({}, r); Object.assign(r, this.row); if(this.t === "machines") stamp(r, old); emit(this.t, "UPDATE", r, old); });
         return { data:rows, error:null };
       }
       if(this.op === "delete"){
-        if(this.t === "needs") rows = rows.filter(r => admin() || r.created_by === (me() || {}).id);   // Schreiber oder Admin
+        if(this.t === "needs" || this.t === "materials") rows = rows.filter(r => admin() || r.created_by === (me() || {}).id);   // Schreiber oder Admin
         else if(!admin()) return { data:[], error:null };
         rows.forEach(r => { T.splice(T.indexOf(r), 1); emit(this.t, "DELETE", null, { id:r.id }); });
         return { data:rows, error:null };

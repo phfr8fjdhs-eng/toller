@@ -167,6 +167,67 @@ expect "Admin löscht fremden Bedarf" "Absperrgitter" "$out"
 $P -c "delete from public.sites where id='$SITE'"
 expect_eq "Beim Löschen der Baustelle verschwindet ihr Bedarf" "0" "$($P -c "select count(*) from public.needs where site_id='$SITE'")"
 
+# ---------------------------------------------------------------- Meldungen und Materialien
+echo
+echo "=== Meldungen an Maschinen (Absender) und Materialien ==="
+MCH=$($P -c "select id from public.machines where name='Bagger 1'")
+col () { $P -c "select $1 from public.machines where id='$MCH'"; }
+
+as_user $U3 "update public.machines set status='waiting', reason='Material fehlt: Kies 0/32' where id='$MCH';" >/dev/null
+expect_eq "Meldung: Name der meldenden Person wird von der Datenbank eingetragen" "ma" "$(col reported_name)"
+expect_eq "Meldung: auch die Person selbst (reported_by)" "$U3" "$(col reported_by)"
+expect_eq "Meldung: Zeit ist gesetzt" "t" "$(col "reported_at > now() - interval '1 minute'")"
+
+as_user $U4 "update public.machines set status='broken', reason='', reported_name='Chef', reported_by='$U1', reported_at='2000-01-01' where id='$MCH';" >/dev/null
+expect_eq "Meldung: Absender kann beim Melden nicht gefälscht werden (Name)" "ma2" "$(col reported_name)"
+expect_eq "Meldung: Absender kann nicht gefälscht werden (Person)" "$U4" "$(col reported_by)"
+expect_eq "Meldung: Zeit kann nicht gefälscht werden" "t" "$(col "reported_at > now() - interval '1 minute'")"
+
+as_user $U3 "update public.machines set reported_name='Hack', reported_by='$U3', reported_at='2000-01-01' where id='$MCH';" >/dev/null
+expect_eq "Meldung: ohne neue Meldung lässt sich der Absender nicht überschreiben" "ma2" "$(col reported_name)"
+as_user $U1 "update public.machines set site_id=null where id='$MCH';" >/dev/null
+expect_eq "Meldung: andere Änderungen (Ort) behalten den Absender" "ma2" "$(col reported_name)"
+
+as_user $U3 "update public.machines set status='running', reason='' where id='$MCH';" >/dev/null
+expect_eq "Meldung: läuft wieder -> Absender und Zeit weg" "|" "$(col "reported_name||'|'||coalesce(reported_at::text,'')")"
+as_user $U3 "update public.machines set status='off' where id='$MCH';" >/dev/null
+expect_eq "Meldung: Werkhof -> kein Absender" "" "$(col reported_name)"
+out=$(as_user $U3 "insert into public.machines(name,sparte,status,reason) values ('Neu gemeldet','tief','waiting','Diesel fehlt') returning reported_name;")
+expect_eq "Meldung: neue Maschine, die schon wartet, trägt den Absender" "ma" "$(echo "$out" | tail -1)"
+
+echo "--- Materialien"
+out=$(as_user $U3 "insert into public.materials(name) values ('  Kies   0/32 ') returning name||'|'||author||'|'||(created_by='$U3');")
+expect_eq "Material: Mitarbeiter schreibt eigenes Material, Leerzeichen bereinigt, Name der Person gesetzt" "Kies 0/32|ma|true" "$(echo "$out" | tail -1)"
+MAT=$($P -c "select id from public.materials where name='Kies 0/32'")
+out=$(as_user $U3 "insert into public.materials(name,author) values ('Humus siebfein','Chef') returning author;")
+expect_eq "Material: Schreiber kann nicht als jemand anderes auftreten" "ma" "$(echo "$out" | tail -1)"
+out=$(as_user $U4 "insert into public.materials(name) values ('KIES 0/32');")
+expect "Material: gleicher Name (auch gross/klein) wird nicht doppelt gespeichert" "duplicate key" "$out"
+out=$(as_user $U3 "insert into public.materials(name,created_by) values ('Fremd','$U1');")
+expect "Material: created_by kann nicht gefälscht werden" "row-level security" "$out"
+out=$(as_user $U2 "insert into public.materials(name) values ('Hack');")
+expect "Material: nicht freigegebene Person kann nichts schreiben" "row-level security" "$out"
+out=$(as_user $U2 "select count(*) from public.materials;")
+expect_eq "Material: nicht freigegebene Person sieht nichts" "0" "$(echo "$out" | tail -1)"
+out=$(as_anon "select count(*) from public.materials;")
+expect "Material: nicht angemeldet kein Zugriff" "permission denied" "$out"
+out=$(as_user $U3 "insert into public.materials(name) values ('x');")
+expect "Material: zu kurzer Name wird abgelehnt" "violates check constraint" "$out"
+LONG=$(printf 'y%.0s' $(seq 1 61))
+out=$(as_user $U3 "insert into public.materials(name) values ('$LONG');")
+expect "Material: Name über 60 Zeichen wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U4 "select count(*) from public.materials;")
+expect_eq "Material: anderer Mitarbeiter sieht die eigenen Einträge der anderen (2)" "2" "$(echo "$out" | tail -1)"
+out=$(as_user $U4 "update public.materials set name='Geändert' where id='$MAT' returning id;")
+expect_not "Material: Name lässt sich nicht ändern" "$MAT" "$out"
+expect_eq "Material: Name ist unverändert" "Kies 0/32" "$($P -c "select name from public.materials where id='$MAT'")"
+out=$(as_user $U4 "delete from public.materials where id='$MAT' returning id;")
+expect_not "Material: fremder Mitarbeiter kann nicht löschen" "$MAT" "$out"
+out=$(as_user $U3 "delete from public.materials where id='$MAT' returning id;")
+expect "Material: Schreiber löscht sein eigenes Material" "$MAT" "$out"
+out=$(as_user $U1 "delete from public.materials where name='Humus siebfein' returning name;")
+expect "Material: Admin löscht fremdes Material" "Humus siebfein" "$out"
+
 # ---------------------------------------------------------------- Update einer bestehenden (alten) Datenbank
 echo
 echo "=== Update einer alten Datenbank (mit Prozent-Spalten) ==="
@@ -179,6 +240,8 @@ expect_eq "Alte Datenbank hat noch keine Tabelle needs" "t" "$($PA -c "select to
 out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
 expect_not "Update: neues schema.sql läuft ohne Fehler über die alte Datenbank" "ERROR" "$out"
 expect_eq "Update: Tabelle needs ist da" "t" "$($PA -c "select to_regclass('public.needs') is not null")"
+expect_eq "Update: Tabelle materials ist da" "t" "$($PA -c "select to_regclass('public.materials') is not null")"
+expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"
 expect_eq "Update: alte Daten sind unverändert" "5 Baustellen, 13 Maschinen" "$($PA -c "select (select count(*) from sites)||' Baustellen, '||(select count(*) from machines)||' Maschinen'")"
 out=$($PA -c "insert into public.sites(name,sparte,lat,lng) values ('Ohne Prozent','tief',47.2,8.8) returning name;" 2>&1)
 expect "Update: Baustelle ohne Material-Spalten anlegen geht weiter" "Ohne Prozent" "$out"

@@ -6,6 +6,7 @@
 <title>Baustellen-Dashboard</title>
 <script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
+<script src="materialien.js"></script>
 <style>
   :root{
     --bg:#0f1419; --panel:#1a222c; --line:#2a3542; --text:#e6edf3; --muted:#8b98a5;
@@ -78,6 +79,15 @@
   .need.done .ntxt{color:var(--muted);text-decoration:line-through}
   .need button{padding:4px 8px;font-size:12px}
   @media(max-width:600px){.need button{padding:9px 12px}}
+  .matlist{display:flex;flex-direction:column;gap:4px;max-height:min(44vh,320px);overflow:auto;padding:2px}
+  .matrow{display:flex;gap:6px;align-items:stretch}
+  .matrow>button:first-child{flex:1;min-width:0;display:flex;justify-content:space-between;align-items:center;gap:10px;text-align:left;padding:10px 12px;font-size:14px}
+  .matrow button{min-height:44px}
+  .matrow .cat{font-size:11px;color:var(--muted);flex:none}
+  .matrow button[aria-pressed=true]{border-color:var(--sel);background:#16324f;color:#fff}
+  .matnew>button:first-child{border-style:dashed;color:var(--sel);font-weight:600;justify-content:flex-start}
+  .matchosen{font-size:14px;min-height:20px}
+  .who{font-size:12px}
   .open3d{width:100%;padding:10px 12px;font-size:14px;margin:4px 0 2px}
   .overlay.v3{align-items:stretch;justify-content:stretch;overflow:hidden;padding:12px}
   .v3wrap{display:flex;flex-direction:column;gap:10px;width:100%;min-height:0}
@@ -337,6 +347,8 @@ let sites = [];        // { id, name, sparte, lat, lng, x?, y? }
 let machines = [];     // { id, name, typ, sparte, site (Baustellen-Id oder null), status, reason }
 let needs = [];        // Bedarf: { id, site, text, author, createdBy, createdAt, done, doneBy }
 let needsOk = true;    // false, wenn die Datenbank noch keine Tabelle needs hat (schema.sql erneut ausführen)
+let customMats = [];   // eigene Materialien der Mitarbeiter (zusätzlich zum Katalog): { id, name, by, createdBy }
+let matsOk = true;     // false, wenn die Datenbank noch keine Tabelle materials hat (Katalog und freie Eingabe gehen trotzdem)
 let selected = null;
 const filter = new Set();      // gewählte Sparten, leer = alle (Mehrfachauswahl)
 let incidents = 0;
@@ -453,43 +465,66 @@ async function dbMachine(m, patch){
   if(r.error){ toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll(); }
 }
 
+// Wer hat gemeldet und wann: in Live setzt die Datenbank das selbst (Trigger machines_stamp).
+// Hier nur die sofortige Anzeige auf diesem Gerät, bis die Antwort der Datenbank kommt.
+function stampLocal(m, before){
+  if(m.status === before.status && m.reason === before.reason) return;
+  if(m.status === "waiting" || m.status === "broken"){ m.by = LIVE ? (me ? me.name : "") : "Demo"; m.at = new Date().toISOString(); }
+  else { m.by = ""; m.at = null; }
+}
+function reportedBy(m){
+  if(!(m.status === "waiting" || m.status === "broken") || !m.by) return "";
+  const d = m.at ? new Date(m.at) : null;
+  let when = "";
+  if(d && !isNaN(d)){
+    const today = new Date().toDateString() === d.toDateString();
+    when = ", " + (today ? d.toLocaleTimeString("de-CH", { hour:"2-digit", minute:"2-digit" }) : needTime(m.at));
+  }
+  return "gemeldet von " + m.by + when;
+}
+
 function setMachine(m, patch, logText){
-  const old = m.status;
+  const old = m.status, before = { status:m.status, reason:m.reason };
   Object.assign(m, patch);
+  stampLocal(m, before);
   if(old !== "broken" && m.status === "broken") onBreak();
   if(logText) addLog(logText);
   render();
   if(LIVE) dbMachine(m, patch);
 }
 
-// Material ist da: alle Maschinen der Baustelle, die auf Material warten, laufen weiter.
-async function materialDelivered(s){
-  let released = false;
-  machines.forEach(x=>{
-    if(x.site === s.id && x.status === "waiting" && x.reason.indexOf("Material") === 0){ x.status = "running"; x.reason = ""; released = true; }
-  });
-  addLog("Material nachgeliefert (" + s.name + ")");
+// Der Grund einer Materialmeldung: "Material fehlt: Kies 0/32" oder mit Hinweis "Material fehlt: Kies 0/32 · ca. 20 m³".
+// Der Schlüssel ist der Teil vor dem Hinweis. Gleiches Material auf derselben Baustelle wird gemeinsam freigegeben.
+const matKey = reason => String(reason || "").split(" · ")[0];
+const isMat = m => String(m.reason || "").indexOf("Material") === 0;
+
+// Material ist da: Maschinen der Baustelle, die auf dasselbe Material warten, laufen weiter.
+// Wer auf anderes Material wartet, wartet weiter (der Status muss stimmen).
+function materialDelivered(s, key){
+  const freed = machines.filter(x => x.site === s.id && x.status === "waiting" && isMat(x) && matKey(x.reason) === key);
+  freed.forEach(x => setMachine(x, { status:"running", reason:"" }));      // speichert je Maschine (in Live)
+  const what = key.replace(/^Material fehlt:?\s*/, "");
+  addLog("Material nachgeliefert" + (what ? ": " + what : "") + " (" + s.name + ")");
   render();
-  if(LIVE && released){
-    const u = await sb.from("machines").update({ status:"running", reason:"" })
-      .eq("site_id", s.id).eq("status", "waiting").like("reason", "Material%");
-    if(u.error){ toast("Speichern fehlgeschlagen: " + u.error.message, true); loadAll(); }
-  }
 }
 
 function report(m, kind){
   if(kind === "broken") setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m));
-  if(kind === "material") setMachine(m, { status:"waiting", reason:"Material fehlt" }, m.name + ": Material fehlt" + where(m));
+  if(kind === "material") modalMaterial(m);                           // Auswahl aus dem Katalog oder eigener Eintrag
   if(kind === "diesel") setMachine(m, { status:"waiting", reason:"Diesel fehlt" }, m.name + ": Diesel fehlt" + where(m));
+}
+function reportMaterial(m, name, note){
+  const reason = "Material fehlt: " + name + (note ? " · " + note : "");
+  setMachine(m, { status:"waiting", reason }, m.name + ": Material fehlt, " + name + (note ? " (" + note + ")" : "") + where(m));
 }
 
 function resolve(m){
   if(m.status === "broken"){
     setMachine(m, { status:"running", reason:"" }, m.name + " repariert" + where(m));
   } else if(m.status === "waiting"){
-    if(m.reason.indexOf("Material") === 0){
+    if(isMat(m)){
       const s = siteOf(m);
-      if(s) materialDelivered(s);
+      if(s) materialDelivered(s, matKey(m.reason));
     } else {
       setMachine(m, { status:"running", reason:"" }, m.name + " getankt" + where(m));
     }
@@ -504,7 +539,7 @@ function deploy(m, siteId){
 
 /* =============================================================== Daten: Anlegen und Löschen */
 const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, lat:r.lat, lng:r.lng });
-const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "" });
+const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "", by:r.reported_name || "", at:r.reported_at || null });
 
 const mapNeed = r => ({ id:r.id, site:r.site_id, text:r.text, author:r.author || "", createdBy:r.created_by, createdAt:r.created_at, done:!!r.done, doneBy:r.done_by || "" });
 function upsertNeed(n){
@@ -916,6 +951,8 @@ function renderDetail(){
     t.appendChild(el("div", "mname", m.name));
     const state = m.status === "waiting" ? m.reason : LABEL[m.status];
     t.appendChild(el("div", "muted", (m.typ ? m.typ + " · " : "") + state));
+    const who = reportedBy(m);
+    if(who) t.appendChild(el("div", "muted who", who));
     r.appendChild(t);
     const acts = el("div", "acts");
     const add = (label, fn, cls)=>{ const b = el("button", cls || "", label); b.onclick = fn; acts.appendChild(b); };
@@ -1026,7 +1063,8 @@ function render(){
   probs.slice(0, 40).forEach(m=>{
     const i = el("div", "item");
     i.appendChild(el("span", "dot " + m.status));
-    i.appendChild(el("span", "", m.name + where(m) + ": " + (m.status === "broken" ? "defekt" : m.reason)));
+    const who = reportedBy(m);
+    i.appendChild(el("span", "", m.name + where(m) + ": " + (m.status === "broken" ? "defekt" : m.reason) + (who ? " · " + who : "")));
     i.onclick = ()=>selectSite(loc(m));
     pEl.appendChild(i);
   });
@@ -1549,6 +1587,180 @@ function syncRealMarkers(){
   updateCompact();
 }
 
+/* =============================================================== Material fehlt: Katalog und eigene Einträge
+   Der grosse Katalog steht in materialien.js. Jede freigegebene Person darf ein eigenes Material eintippen,
+   es wird in der Tabelle materials gespeichert und steht danach allen zur Auswahl (Admins und der Schreiber können es löschen).
+   Wer die Meldung abschickt, steht an der Maschine: Name und Zeit setzt die Datenbank (Trigger machines_stamp). */
+const KATALOG = Array.isArray(window.MATERIAL_KATALOG) ? window.MATERIAL_KATALOG : [];
+const EIGENE = "Eigene Einträge";
+let matRefresh = null;                 // zeichnet die Trefferliste des offenen Auswahlfensters neu
+const mapMaterial = r => ({ id:r.id, name:r.name, by:r.author || "", createdBy:r.created_by });
+function upsertMaterial(x){
+  const i = customMats.findIndex(y => y.id === x.id);
+  if(i >= 0) Object.assign(customMats[i], x); else customMats.push(x);
+}
+const canDeleteMaterial = x => isAdmin() || (LIVE && me && x.createdBy === me.id);
+// Name bereinigen: Leerzeichen, höchstens 60 Zeichen. Der Punkt in der Mitte trennt in der Meldung den Hinweis ab und ist deshalb im Namen nicht erlaubt.
+const cleanText = s => String(s || "").replace(/\s+/g, " ").replace(/·/g, "-").trim().slice(0, 60);
+// Suche ohne Rücksicht auf Gross und Klein, Umlaute oder ö/oe
+const fold = s => String(s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ß/g, "ss").replace(/oe/g, "o").replace(/ae/g, "a").replace(/ue/g, "u");
+
+let katalogItems = null;
+function materialItems(){
+  if(!katalogItems){
+    katalogItems = [];
+    KATALOG.forEach(g => g[1].forEach(n => katalogItems.push({ name:n, cat:g[0], custom:false, key:fold(n), catKey:fold(g[0]) })));
+  }
+  return katalogItems.concat(customMats.map(c => ({ name:c.name, cat:EIGENE, custom:true, ref:c, by:c.by, key:fold(c.name), catKey:fold(EIGENE) })));
+}
+function randomMaterial(){
+  const all = materialItems();
+  return all.length ? all[Math.floor(Math.random() * all.length)].name : "Material";
+}
+
+// Treffer: alle Suchwörter müssen im Namen oder in der Kategorie vorkommen. Wer mit dem Suchwort beginnt, kommt zuerst.
+function searchMaterials(q, cat){
+  const words = fold(q).split(" ").filter(Boolean);
+  let list = materialItems().filter(i => (!cat || i.cat === cat) && words.every(w => i.key.indexOf(w) >= 0 || i.catKey.indexOf(w) >= 0));
+  if(words.length) list.sort((a, b) => (b.key.indexOf(words[0]) === 0) - (a.key.indexOf(words[0]) === 0) || a.name.length - b.name.length);
+  return list;
+}
+
+async function addMaterial(name){
+  if(materialItems().some(i => i.key === fold(name))) return;             // gibt es schon
+  if(!LIVE){ customMats.push({ id:"c" + (++localId), name, by:"Demo", createdBy:"demo" }); return; }
+  if(!matsOk) return;                                                      // Tabelle fehlt: nur für diese Meldung nutzen
+  const r = await sb.from("materials").insert({ name }).select().single();
+  if(r.error){
+    if(r.error.code !== "23505") toast("Das Material konnte nicht für alle gespeichert werden: " + r.error.message, true);
+    return;                                                                // 23505 = jemand hat es gerade selbst angelegt
+  }
+  upsertMaterial(mapMaterial(r.data));
+}
+async function deleteMaterial(x){
+  customMats = customMats.filter(y => y.id !== x.id);
+  if(LIVE && matsOk){
+    const r = await sb.from("materials").delete().eq("id", x.id);
+    if(r.error){ toast("Löschen fehlgeschlagen: " + r.error.message, true); loadAll(); }
+  }
+}
+
+function modalMaterial(m){
+  const body = el("div", "form");
+  const total = materialItems().length;
+  let cat = "", chosen = null;
+
+  const search = input("search", "", "matSearch"); search.maxLength = 60; search.placeholder = "Suchen, zum Beispiel Kies, Asphalt, Rohr";
+  const catSel = el("select"); catSel.id = "matCat";
+  const two = el("div", "row2");
+  two.appendChild(field("Was fehlt? (" + total + " Materialien)", search));
+  two.appendChild(field("Kategorie", catSel));
+  body.appendChild(two);
+
+  const newBox = el("div"); newBox.id = "matNewBox";                         // "neu hinzufügen" steht neben der Suche, nicht in der langen Liste
+  body.appendChild(newBox);
+  const list = el("div", "matlist results"); list.id = "matList";
+  body.appendChild(list);
+
+  const chosenBox = el("div", "matchosen");
+  chosenBox.setAttribute("aria-live", "polite");
+  body.appendChild(chosenBox);
+  const note = input("text", "", "matNote"); note.maxLength = 60; note.placeholder = "zum Beispiel 20 m³ bis Mittwoch";
+  body.appendChild(field("Menge oder Hinweis (freiwillig, ohne Prozent)", note));
+  const msg = el("div", "msg"); msg.setAttribute("role", "status"); body.appendChild(msg);
+  const go = el("button", "primary", "Melden"); go.type = "button"; go.id = "matGo";
+  body.appendChild(go);
+  if(LIVE && !matsOk) body.appendChild(el("div", "empty", "Eigene Materialien werden erst nach dem Datenbank-Update (schema.sql erneut ausführen) für alle gespeichert. Die Meldung geht trotzdem."));
+
+  const showChosen = ()=>{
+    chosenBox.textContent = "";
+    if(!chosen) return;
+    chosenBox.appendChild(el("span", "muted", "Gewählt: "));
+    chosenBox.appendChild(el("strong", "", chosen.name));
+    if(chosen.isNew) chosenBox.appendChild(el("span", "muted", " (neu, wird für alle gespeichert)"));
+  };
+  const pick = (name, isNew)=>{ chosen = { name, isNew:!!isNew }; msg.textContent = ""; showChosen(); const st = list.scrollTop; renderList(); list.scrollTop = st; };
+
+  function renderCats(){
+    const names = KATALOG.map(g => g[0]);
+    if(customMats.length) names.push(EIGENE);
+    if(cat && names.indexOf(cat) < 0) cat = "";
+    catSel.innerHTML = "";
+    [["", "Alle Kategorien"]].concat(names.map(n => [n, n])).forEach(c=>{ const o = el("option", "", c[1]); o.value = c[0]; catSel.appendChild(o); });
+    catSel.value = cat;
+  }
+  catSel.onchange = ()=>{ cat = catSel.value; renderList(); };
+
+  function renderList(){
+    list.innerHTML = "";
+    newBox.innerHTML = "";
+    const q = search.value, typed = cleanText(q);
+    let hits = searchMaterials(q, cat);
+    const exact = materialItems().some(i => i.key === fold(typed));
+    if(typed.length >= 2 && !exact){                                      // eigenen Namen eintippen: für alle möglich, kein Admin nötig
+      const row = el("div", "matrow matnew");
+      const b = el("button", "", ""); b.type = "button";
+      b.appendChild(el("span", "", "+ Nicht dabei? „" + typed + "“ neu hinzufügen"));
+      b.setAttribute("aria-pressed", chosen && chosen.isNew && chosen.name === typed ? "true" : "false");
+      b.onclick = ()=>pick(typed, true);
+      row.appendChild(b); newBox.appendChild(row);
+    }
+    if(!typed && !cat){
+      hits = hits.filter(i => i.custom).slice().reverse();
+      list.appendChild(el("div", "empty", "Tippe oben, was fehlt, oder wähle eine Kategorie. " + total + " Materialien zur Auswahl."
+        + (hits.length ? " Zuletzt von Mitarbeitern ergänzt:" : "")));
+    }
+    const MAXROWS = 40;
+    hits.slice(0, MAXROWS).forEach(i=>{
+      const row = el("div", "matrow");
+      const b = el("button", "", ""); b.type = "button";
+      b.appendChild(el("span", "", i.name));
+      b.appendChild(el("span", "cat", i.custom ? EIGENE + (i.by ? " · " + i.by : "") : i.cat));
+      b.setAttribute("aria-pressed", chosen && !chosen.isNew && fold(chosen.name) === i.key ? "true" : "false");
+      b.onclick = ()=>pick(i.name, false);
+      row.appendChild(b);
+      if(i.custom && canDeleteMaterial(i.ref)){
+        row.appendChild(confirmBtn("Löschen", "mat:" + i.ref.id, async ()=>{
+          if(chosen && fold(chosen.name) === i.key) { chosen = null; showChosen(); }
+          await deleteMaterial(i.ref); renderCats(); renderList();
+        }));
+      }
+      list.appendChild(row);
+    });
+    if(hits.length > MAXROWS) list.appendChild(el("div", "empty", "… und " + (hits.length - MAXROWS) + " weitere. Suche eingrenzen."));
+    if(!hits.length && (typed || cat) && typed.length < 2) list.appendChild(el("div", "empty", "Nichts gefunden."));
+    if(!hits.length && typed.length >= 2) list.appendChild(el("div", "empty", "Nichts im Katalog gefunden. Oben kannst du den Namen neu hinzufügen."));
+  }
+  matRefresh = ()=>{ renderCats(); renderList(); };
+
+  search.addEventListener("input", renderList);
+  search.addEventListener("keydown", e=>{
+    if(e.key !== "Enter") return;
+    e.preventDefault();
+    if(chosen){ go.click(); return; }
+    const first = searchMaterials(search.value, cat)[0];                 // Enter wählt den ersten Treffer, nie ein neues Material aus Versehen
+    if(first) pick(first.name, false);
+  });
+  go.onclick = async ()=>{
+    let c = chosen;
+    if(!c){
+      const t = cleanText(search.value), known = materialItems().find(i => i.key === fold(t));
+      if(known) c = { name:known.name, isNew:false };
+    }
+    if(!c){ msg.className = "msg err"; msg.textContent = "Bitte ein Material aus der Liste wählen oder „neu hinzufügen“ antippen."; return; }
+    const mm = machines.find(x => x.id === m.id);
+    if(!mm){ closeModal(); toast("Diese Maschine gibt es nicht mehr."); return; }
+    go.disabled = true;
+    if(c.isNew) await addMaterial(c.name);
+    reportMaterial(mm, c.name, cleanText(note.value));
+    closeModal();
+  };
+
+  renderCats(); renderList();
+  openModal("Material fehlt: " + m.name, body, true);
+  search.focus();
+}
+
 /* =============================================================== Formulare */
 function closeModal(){ const m = $("modal"); if(m) m.remove(); }
 function openModal(title, body, wide){
@@ -1758,7 +1970,7 @@ async function handleAuthSubmit(e){
 
 function stopLive(){
   if(channel){ try{ sb.removeChannel(channel); }catch(e){} channel = null; }
-  sites = []; machines = []; needs = []; needsOk = true; logs.length = 0; seenLog.clear(); selected = null;
+  sites = []; machines = []; needs = []; needsOk = true; customMats = []; matsOk = true; logs.length = 0; seenLog.clear(); selected = null;
   me = null; subscribedOnce = false; didOverview = false;
   $("conn").hidden = true;
 }
@@ -1799,7 +2011,8 @@ async function loadAll(){
     sb.from("sites").select("*").order("name"),
     sb.from("machines").select("*").order("name"),
     sb.from("activity").select("*").order("created_at", { ascending:false }).limit(8),
-    sb.from("needs").select("*").order("created_at", { ascending:false }).limit(1000)
+    sb.from("needs").select("*").order("created_at", { ascending:false }).limit(1000),
+    sb.from("materials").select("*").order("name").limit(1000)
   ]);
   const err = res[0].error || res[1].error || res[2].error;
   if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
@@ -1808,6 +2021,8 @@ async function loadAll(){
   // Fehlt die Tabelle needs (Datenbank noch nicht aktualisiert), läuft alles andere trotzdem
   needsOk = !res[3].error;
   needs = needsOk ? res[3].data.map(mapNeed) : [];
+  matsOk = !res[4].error;                                  // ohne Tabelle materials gehen Katalog und freie Eingabe trotzdem
+  customMats = matsOk ? res[4].data.map(mapMaterial) : [];
   logs.length = 0; seenLog.clear();
   res[2].data.slice().reverse().forEach(r => pushLog(r.text, r.created_at, r.id));
   if(selected && !findSite(selected)) selected = null;
@@ -1844,6 +2059,10 @@ function subscribe(){
   ch.on("postgres_changes", { event:"*", schema:"public", table:"needs" }, p=>{
     if(p.eventType === "DELETE") needs = needs.filter(n => n.id !== p.old.id); else upsertNeed(mapNeed(p.new));
     softRender();
+  });
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"materials" }, p=>{
+    if(p.eventType === "DELETE") customMats = customMats.filter(x => x.id !== p.old.id); else upsertMaterial(mapMaterial(p.new));
+    if(matRefresh && $("matList")) matRefresh();            // offenes Auswahlfenster nachführen
   });
   ch.on("postgres_changes", { event:"INSERT", schema:"public", table:"activity" }, p=>{
     pushLog(p.new.text, p.new.created_at, p.new.id);
@@ -1894,8 +2113,10 @@ function tick(){
     if(m.status !== "running" || !m.site) return;
     const r = Math.random();
     if(r < 0.003) setMachine(m, { status:"broken", reason:"" }, m.name + " ausgefallen" + where(m));
-    else if(r < 0.006) setMachine(m, { status:"waiting", reason:"Material fehlt" }, m.name + ": Material fehlt" + where(m));
+    else if(r < 0.006) reportMaterial(m, randomMaterial(), "");
     else if(r < 0.008) setMachine(m, { status:"waiting", reason:"Diesel fehlt" }, m.name + ": Diesel fehlt" + where(m));
+    else return;
+    m.by = "Simulation";                      // die Vorführung meldet selbst, das soll man sehen
   });
   softRender();
 }

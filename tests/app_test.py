@@ -5,6 +5,8 @@ import json
 DIR = os.path.dirname(os.path.abspath(__file__))
 URL = "file://" + os.path.join(os.path.dirname(DIR), "public", "index.html")
 STUBS = open(DIR + "/stubs.js", encoding="utf-8").read()
+# Die Demo meldet von selbst zufaellige Stoerungen. Fuer feste Testergebnisse gibt es im Test keinen Zufall (Math.random liefert immer 0.5).
+NO_RANDOM = "Math.random = () => 0.5;"
 CONFIG = 'window.APP_CONFIG={supabaseUrl:"https://x.supabase.co",supabaseKey:"anon-test",depot:{lat:47.234,lng:8.86}};'
 
 errors = []
@@ -23,7 +25,7 @@ def new_page(b, live, w=1280, h=900):
     pg.route("**/api3.geo.admin.ch/**", lambda r: r.fulfill(
         body=json.dumps({"results": [{"attrs": {"label": "<b>Bahnhofstrasse 1</b> 8645 Jona", "lat": 47.2271, "lon": 8.8404}}]}),
         content_type="application/json", headers={"access-control-allow-origin": "*"}))
-    pg.add_init_script(STUBS)
+    pg.add_init_script(NO_RANDOM + STUBS)
     return pg
 
 with sync_playwright() as p:
@@ -111,7 +113,37 @@ with sync_playwright() as p:
     d.locator("#detail .need", has_text="Sand 3 Tonnen").locator("button", has_text="Löschen").click()
     d.locator("#detail .need", has_text="Sand 3 Tonnen").locator("button", has_text="Sicher").click()
     check("Bedarf: Loeschen mit zweitem Tipp", d.locator("#detail .need", has_text="Sand 3 Tonnen").count() == 0)
+    # Material fehlt (Demo): Katalog, eigener Eintrag, Absender "Demo"
+    d.click("#siteList .item >> text=Kanal Bahnhofstr.")
+    d.locator('#detail .mrow', has_text="Minibagger 1").locator('button:has-text("Material fehlt")').click(); d.wait_for_timeout(100)
+    check("Demo Material: Fenster mit Titel und Suchfeld", "Minibagger 1" in d.inner_text("#modal h2") and d.locator("#matSearch").count() == 1)
+    d.fill("#matSearch", "moertel"); d.wait_for_timeout(100)
+    check("Demo Material: Suche ohne Umlaute findet Moertel-Materialien", d.locator("#matList .matrow button", has_text="Fertigmörtel").count() == 1 and d.locator("#matList .matrow button", has_text="Mörtelsand 0/2").count() == 1)
+    d.fill("#matSearch", "rohr"); d.wait_for_timeout(100)
+    check("Demo Material: Suche findet auch ueber die Kategorie (Rohre)", d.locator("#matList .matrow", has_text="KG-Rohr DN 200").count() == 1 and d.locator("#matList .matrow", has_text="Rohre, Schächte, Leitungen").count() >= 1)
+    d.fill("#matSearch", "fertigmoertel"); d.press("#matSearch", "Enter")
+    check("Demo Material: Enter waehlt den ersten Treffer, meldet noch nicht", "Fertigmörtel" in d.inner_text(".matchosen") and d.locator("#modal").count() == 1)
+    d.press("#matSearch", "Enter"); d.wait_for_timeout(200)
+    mm = d.evaluate("machines.find(m => m.id === 2)")
+    check("Demo Material: zweites Enter meldet, Grund mit Material, Absender Demo", mm["status"] == "waiting" and mm["reason"] == "Material fehlt: Fertigmörtel" and mm["by"] == "Demo" and d.locator("#modal").count() == 0, str(mm))
+    check("Demo Material: Zeile zeigt 'gemeldet von Demo', Baustelle wird gelb", "gemeldet von Demo" in d.inner_text("#detail") and d.locator("#lmap .lm .site.waiting", has_text="Kanal Bahnhofstr.").count() + d.locator("#lmap .lm .site.broken", has_text="Kanal Bahnhofstr.").count() >= 1)
+    d.locator('#detail .mrow', has_text="Dumper 1").locator('button:has-text("Material fehlt")').click(); d.wait_for_timeout(100)
+    d.fill("#matSearch", "Sonderfarbe Zeta"); d.wait_for_timeout(100)
+    d.click("#modal .matnew button"); d.fill("#matNote", "2 Kessel"); d.click("#matGo"); d.wait_for_timeout(200)
+    check("Demo Material: eigenes Material wird gemeldet und ist danach in der Auswahl", d.evaluate("machines.find(m => m.id === 3).reason") == "Material fehlt: Sonderfarbe Zeta · 2 Kessel" and d.evaluate("customMats.map(c => c.name)") == ["Sonderfarbe Zeta"], d.evaluate("machines.find(m => m.id === 3).reason"))
+    d.locator('#detail .mrow', has_text="Bagger 1").locator('button:has-text("Material fehlt")').click(); d.wait_for_timeout(100)
+    check("Demo Material: ohne Suche stehen die eigenen Eintraege zuerst", d.locator("#matList .matrow", has_text="Sonderfarbe Zeta").count() == 1 and "Zuletzt von Mitarbeitern" in d.inner_text("#matList"))
+    d.click("#modal >> text=Schliessen")
+    d.locator('#detail .mrow', has_text="Minibagger 1").locator('button:has-text("Nachgeliefert")').click(); d.wait_for_timeout(200)
+    check("Demo Material: Nachgeliefert gibt nur die Maschine mit demselben Material frei", d.evaluate("machines.find(m => m.id === 2).status") == "running" and d.evaluate("machines.find(m => m.id === 3).status") == "waiting")
+    d.locator('#detail .mrow', has_text="Dumper 1").locator('button:has-text("Nachgeliefert")').click(); d.wait_for_timeout(200)
+    check("Demo Material: danach laufen beide", d.evaluate("machines.find(m => m.id === 3).status") == "running" and "gemeldet von" not in d.inner_text("#detail"))
     d.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_demo.png"), full_page=False)
+    # Die Vorfuehrung meldet selbst: Absender ist "Simulation", nie eine echte Person, und es ist ein Material aus dem Katalog
+    sim = new_page(b, False); sim.goto(URL + "?modus=leicht"); sim.wait_for_timeout(500)
+    sim.evaluate("Math.random = () => 0.004; tick(); Math.random = () => 0.5;")
+    ws = sim.evaluate("machines.filter(m => m.status === 'waiting')")
+    check("Demo: die Simulation meldet Material mit Katalog-Namen und Absender 'Simulation'", len(ws) >= 5 and all(m["by"] == "Simulation" and m["reason"].startswith("Material fehlt: ") and len(m["reason"]) > 17 for m in ws), str(ws[:1]))
 
     # ============================================================ LIVE
     print("=== LIVE-MODUS (Ersatz-Datenbank) ===")
@@ -176,26 +208,102 @@ with sync_playwright() as p:
     pg.click("#detail >> text=Repariert"); pg.wait_for_timeout(300)
     check("Live: Repariert", pg.evaluate("window.__db.machines[0].status") == "running")
 
-    # Material fehlt -> nachliefern
-    pg.click("#detail >> text=Material fehlt"); pg.wait_for_timeout(200)
-    check("Live: Material fehlt wartet", pg.evaluate("window.__db.machines[0].status") == "waiting" and "Material" in pg.evaluate("window.__db.machines[0].reason"))
+    # Material fehlt: Auswahl aus dem Katalog, eigener Eintrag, Absender
+    mfb = lambda: pg.locator('#detail .mrow button:has-text("Material fehlt")').first
+    mfb().click(); pg.wait_for_timeout(200)
+    check("Material: Tipp oeffnet die Auswahl, gemeldet wird noch nichts", pg.locator("#modal #matSearch").count() == 1 and pg.evaluate("window.__db.machines[0].status") == "running")
+    check("Material: Titel nennt die Maschine, Katalog hat ueber 400 Eintraege", "Bagger A" in pg.inner_text("#modal h2") and int("".join(c for c in pg.inner_text("#modal label span").split("(")[1] if c.isdigit())) > 400, pg.inner_text("#modal label span"))
+    pg.click("#matGo")
+    check("Material: ohne Auswahl wird nicht gemeldet, Hinweis erscheint", "aus der Liste" in pg.inner_text("#modal .msg") and pg.evaluate("window.__db.machines[0].status") == "running")
+    pg.fill("#matSearch", "kies 0/32"); pg.wait_for_timeout(100)
+    check("Material: Suche findet Kies 0/32", pg.locator("#matList .matrow button", has_text="Kies 0/32").count() >= 1)
+    pg.locator("#matList .matrow button", has_text="Kies 0/32").first.click()
+    check("Material: Auswahl wird angezeigt", "Kies 0/32" in pg.inner_text(".matchosen"))
+    pg.fill("#matNote", "ca. 20 m³ bis Mittwoch"); pg.click("#matGo"); pg.wait_for_timeout(300)
+    m0 = pg.evaluate("window.__db.machines[0]")
+    check("Material: Meldung in Datenbank mit Material und Hinweis", m0["status"] == "waiting" and m0["reason"] == "Material fehlt: Kies 0/32 · ca. 20 m³ bis Mittwoch", m0["reason"])
+    check("Material: Absender steht in der Datenbank (Chef)", m0["reported_name"] == "Chef" and m0["reported_at"])
+    check("Material: Fenster ist zu", pg.locator("#modal").count() == 0)
+    check("Material: Maschine zeigt wer es gemeldet hat", "Material fehlt: Kies 0/32" in pg.inner_text("#detail .mrow") and "gemeldet von Chef" in pg.inner_text("#detail .mrow"), pg.inner_text("#detail .mrow"))
+    check("Material: Problemliste zeigt Material und Absender", "Kies 0/32" in pg.inner_text("#problems") and "gemeldet von Chef" in pg.inner_text("#problems"), pg.inner_text("#problems"))
+    check("Material: Protokoll nennt das Material", any("Kies 0/32" in a["text"] for a in pg.evaluate("window.__db.activity")))
     pg.click("#detail .mrow >> text=Nachgeliefert"); pg.wait_for_timeout(300)
-    check("Live: Nachgeliefert -> laeuft wieder", pg.evaluate("window.__db.machines[0].status") == "running" and pg.evaluate("window.__db.machines[0].reason") == "")
+    check("Live: Nachgeliefert -> laeuft wieder, Absender weg", pg.evaluate("window.__db.machines[0].status") == "running" and pg.evaluate("window.__db.machines[0].reason") == "" and pg.evaluate("window.__db.machines[0].reported_name") == "" and "gemeldet von" not in pg.inner_text("#detail"))
 
     check("Live: keine Prozent-Anzeige fuer Material oder Diesel", "%" not in pg.inner_text("#detail") and pg.locator("#levelInput").count() == 0)
     pg.click("#detail .mrow >> text=Diesel fehlt"); pg.wait_for_timeout(300)
-    check("Live: Diesel fehlt wartet", pg.evaluate("window.__db.machines[0].status") == "waiting" and pg.evaluate("window.__db.machines[0].reason") == "Diesel fehlt")
+    check("Live: Diesel fehlt wartet, Absender steht dabei", pg.evaluate("window.__db.machines[0].status") == "waiting" and pg.evaluate("window.__db.machines[0].reason") == "Diesel fehlt" and pg.evaluate("window.__db.machines[0].reported_name") == "Chef" and "gemeldet von Chef" in pg.inner_text("#detail .mrow"))
     pg.click("#detail .mrow >> text=Getankt"); pg.wait_for_timeout(300)
     check("Live: Getankt -> laeuft wieder", pg.evaluate("window.__db.machines[0].status") == "running")
 
-    # Zwei Maschinen warten auf Material: ein Tipp auf Nachgeliefert gibt die ganze Baustelle frei
+    # Eigenes Material eintippen (jede freigegebene Person darf), steht danach allen zur Verfuegung
+    mfb().click(); pg.wait_for_timeout(100)
+    pg.fill("#matSearch", "Zierkies Rosa 16/32"); pg.wait_for_timeout(100)
+    check("Material: unbekannter Name bietet 'neu hinzufuegen' an", pg.locator("#modal .matnew button").count() == 1 and "neu hinzufügen" in pg.inner_text("#modal .matnew"))
+    pg.press("#matSearch", "Enter")
+    check("Material: Enter legt kein neues Material aus Versehen an", pg.locator(".matchosen").inner_text() == "" and pg.locator("#modal").count() == 1 and len(pg.evaluate("window.__db.materials")) == 0)
+    pg.click("#matGo")
+    check("Material: getippter Name ohne Tipp auf 'neu hinzufuegen' wird nicht gemeldet", pg.locator("#modal").count() == 1 and pg.evaluate("window.__db.machines[0].status") == "running")
+    pg.click("#modal .matnew button"); pg.click("#matGo"); pg.wait_for_timeout(400)
+    mat = pg.evaluate("window.__db.materials")
+    check("Material: eigener Eintrag in der Datenbank mit Name der Person", len(mat) == 1 and mat[0]["name"] == "Zierkies Rosa 16/32" and mat[0]["author"] == "Chef", str(mat))
+    check("Material: Meldung nennt das eigene Material", pg.evaluate("window.__db.machines[0].reason") == "Material fehlt: Zierkies Rosa 16/32")
+    pg.click("#detail .mrow >> text=Nachgeliefert"); pg.wait_for_timeout(300)
+    mfb().click(); pg.wait_for_timeout(100)
+    check("Material: eigener Eintrag steht danach im Katalog und als Kategorie Eigene Eintraege", pg.locator("#matCat option", has_text="Eigene Einträge").count() == 1 and pg.locator("#matList .matrow", has_text="Zierkies Rosa 16/32").count() == 1)
+    pg.fill("#matSearch", "ZIERKIES ROSA 16/32"); pg.wait_for_timeout(100)
+    check("Material: Gross/Klein egal, schon vorhanden -> nichts Neues", pg.locator("#modal .matnew").count() == 0 and pg.locator("#matList .matrow", has_text="Zierkies Rosa 16/32").count() == 1)
+    pg.fill("#matSearch", "moertel"); pg.wait_for_timeout(100)
+    check("Material: Suche ohne Umlaute findet Moertel", pg.locator("#matList .matrow button", has_text="Fertigmörtel").count() >= 1)
+    pg.fill("#matSearch", "kies"); pg.wait_for_timeout(100)
+    check("Material: lange Trefferlisten sind begrenzt, mit ehrlichem Hinweis", pg.locator("#matList .matrow").count() <= 42 and "weitere" in pg.inner_text("#matList"), str(pg.locator("#matList .matrow").count()))
+    pg.fill("#matSearch", ""); pg.select_option("#matCat", label="Folien, Vliese, Abdichtung")
+    check("Material: Kategorie filtert", pg.locator("#matList .matrow").count() == 20 and pg.locator("#matList .matrow", has_text="Geotextil 200").count() == 1, str(pg.locator("#matList .matrow").count()))
+    pg.select_option("#matCat", label="Alle Kategorien")
+    pg.fill("#matSearch", "<b>x</b> Pulver"); pg.wait_for_timeout(100)
+    pg.click("#modal .matnew button"); pg.click("#matGo"); pg.wait_for_timeout(400)
+    check("Material: Eingabe wird nur als Text angezeigt, nie als HTML", "<b>x</b> Pulver" in pg.inner_text("#detail .mrow") and pg.locator("#detail .mrow b").count() == 0 and pg.locator("#problems b").count() == 0)
+    pg.click("#detail .mrow >> text=Nachgeliefert"); pg.wait_for_timeout(300)
+    mfb().click(); pg.wait_for_timeout(100)
+    pg.fill("#matSearch", "Zierkies Rosa 16/32"); pg.wait_for_timeout(100)
+    check("Material: Schreiber/Admin sieht bei eigenen Eintraegen Loeschen", pg.locator("#matList .matrow", has_text="Zierkies Rosa").locator("button", has_text="Löschen").count() == 1)
+    pg.fill("#matSearch", "kies 0/32"); pg.wait_for_timeout(100)
+    check("Material: Katalogeintraege haben kein Loeschen", pg.locator("#matList .matrow", has_text="Kies 0/32").count() >= 1 and pg.locator("#matList .matrow", has_text="Kies 0/32").locator("button", has_text="Löschen").count() == 0)
+    pg.fill("#matSearch", "Zierkies Rosa 16/32"); pg.wait_for_timeout(100)
+    pg.locator("#matList .matrow", has_text="Zierkies Rosa").locator("button", has_text="Löschen").click()
+    pg.locator("#matList .matrow", has_text="Zierkies Rosa").locator("button", has_text="Sicher").click(); pg.wait_for_timeout(300)
+    check("Material: eigenen Eintrag loeschen (zweiter Tipp) entfernt ihn auch in der Datenbank", all(x["name"] != "Zierkies Rosa 16/32" for x in pg.evaluate("window.__db.materials")))
+    # Ein anderes Handy ergaenzt ein Material, waehrend das Fenster offen ist
+    pg.evaluate("(()=>{const r={id:'mx1',name:'Spezialkleber Delta',author:'Anna',created_by:'u-anna',created_at:new Date().toISOString()};window.__db.materials.push(r);window.__db.emit('materials','INSERT',r);})()")
+    pg.fill("#matSearch", "delta"); pg.wait_for_timeout(200)
+    check("Material: Eintrag von einem anderen Handy erscheint im offenen Fenster", pg.locator("#matList .matrow", has_text="Spezialkleber Delta").count() == 1 and "Anna" in pg.inner_text("#matList"))
+    pg.click("#modal >> text=Schliessen")
+    check("Material: Schliessen meldet nichts", pg.locator("#modal").count() == 0 and pg.evaluate("window.__db.machines[0].status") == "running")
+    # Meldung von einem anderen Handy: der Absender kommt mit
+    pg.evaluate("(()=>{const m=window.__db.machines[0];const old=Object.assign({},m);m.status='waiting';m.reason='Material fehlt: Humus (Oberboden)';m.reported_name='Anna';m.reported_at=new Date().toISOString();window.__db.emit('machines','UPDATE',m,old);})()")
+    pg.wait_for_timeout(300)
+    check("Material: fremde Meldung zeigt den Absender per Echtzeit", "gemeldet von Anna" in pg.inner_text("#detail .mrow") and "Anna" in pg.inner_text("#problems"))
+    pg.evaluate("(()=>{const m=window.__db.machines[0];const old=Object.assign({},m);m.status='running';m.reason='';m.reported_name='';m.reported_at=null;window.__db.emit('machines','UPDATE',m,old);})()")
+    pg.wait_for_timeout(200)
+
+    # Zwei Maschinen warten auf dasselbe Material: ein Tipp auf Nachgeliefert gibt beide frei. Anderes Material wartet weiter.
     pg.click("#addMachineBtn"); pg.fill("#m-name", "Bagger B"); pg.fill("#m-typ", "Minibagger")
     pg.click("text=Maschine speichern"); pg.wait_for_timeout(300)
-    pg.click('#detail .mrow button:has-text("Material fehlt") >> nth=0'); pg.wait_for_timeout(200)
-    pg.click('#detail .mrow button:has-text("Material fehlt") >> nth=0'); pg.wait_for_timeout(200)
+    def melden(nth, suche, wahl):
+        pg.locator('#detail .mrow button:has-text("Material fehlt")').nth(nth).click(); pg.wait_for_timeout(100)
+        pg.fill("#matSearch", suche); pg.wait_for_timeout(100)
+        pg.locator("#matList .matrow button", has_text=wahl).first.click(); pg.click("#matGo"); pg.wait_for_timeout(300)
+    melden(0, "kies 0/32", "Kies 0/32"); melden(0, "kies 0/32", "Kies 0/32")
     check("Live: zwei Maschinen warten auf Material", sum(1 for m in pg.evaluate("window.__db.machines") if m["status"] == "waiting") == 2)
     pg.click('#detail .mrow button:has-text("Nachgeliefert") >> nth=0'); pg.wait_for_timeout(400)
-    check("Live: Nachgeliefert gibt alle wartenden Maschinen der Baustelle frei", all(m["status"] == "running" for m in pg.evaluate("window.__db.machines")))
+    check("Live: Nachgeliefert gibt alle Maschinen frei, die auf dasselbe Material warten", all(m["status"] == "running" for m in pg.evaluate("window.__db.machines")))
+    melden(0, "kies 0/32", "Kies 0/32"); melden(0, "asphalt ac 8", "Asphalt AC 8 N")
+    check("Live: zwei verschiedene Materialien -> beide wartend", sorted(m["reason"] for m in pg.evaluate("window.__db.machines")) == ["Material fehlt: Asphalt AC 8 N (Deckschicht)", "Material fehlt: Kies 0/32"], str([m["reason"] for m in pg.evaluate("window.__db.machines")]))
+    pg.locator('#detail .mrow', has_text="Kies 0/32").locator('button:has-text("Nachgeliefert")').click(); pg.wait_for_timeout(400)
+    st = {m["reason"] or "-": m["status"] for m in pg.evaluate("window.__db.machines")}
+    check("Live: Kies geliefert -> die Maschine, die auf Asphalt wartet, wartet weiter (Status bleibt ehrlich)", st.get("Material fehlt: Asphalt AC 8 N (Deckschicht)") == "waiting" and st.get("-") == "running", str(st))
+    pg.locator('#detail .mrow', has_text="Asphalt AC 8 N").locator('button:has-text("Nachgeliefert")').click(); pg.wait_for_timeout(400)
+    check("Live: danach laufen alle wieder", all(m["status"] == "running" for m in pg.evaluate("window.__db.machines")))
 
     # Stoerung von einem anderen Handy (Echtzeit)
     b1 = pg.evaluate("incidents")
@@ -233,6 +341,18 @@ with sync_playwright() as p:
     pg.evaluate("loadAll()"); pg.wait_for_timeout(300)
     check("Live: nach dem Update ist der Bedarf wieder da", pg.locator("#needInput").count() == 1 and pg.locator("#detail .need").count() == 1)
 
+    # Tabelle materials fehlt (Datenbank noch nicht aktualisiert): Katalog und freie Eingabe gehen trotzdem
+    pg.evaluate("window.__db.failNext={table:'materials',msg:'relation materials does not exist'}")
+    pg.evaluate("loadAll()"); pg.wait_for_timeout(300)
+    n_mat = len(pg.evaluate("window.__db.materials"))
+    pg.locator('#detail .mrow button:has-text("Material fehlt")').first.click(); pg.wait_for_timeout(100)
+    check("Material: fehlt die Tabelle, steht ein Hinweis im Fenster und der Katalog geht", "Datenbank-Update" in pg.inner_text("#modal") and pg.locator("#matList").count() == 1)
+    pg.fill("#matSearch", "Sonderharz Omega"); pg.wait_for_timeout(100)
+    pg.click("#modal .matnew button"); pg.click("#matGo"); pg.wait_for_timeout(300)
+    check("Material: ohne Tabelle geht die Meldung trotzdem, es wird nichts in materials geschrieben", pg.evaluate("window.__db.machines[0].reason") == "Material fehlt: Sonderharz Omega" and len(pg.evaluate("window.__db.materials")) == n_mat)
+    pg.click("#detail .mrow >> text=Nachgeliefert"); pg.wait_for_timeout(300)
+    pg.evaluate("loadAll()"); pg.wait_for_timeout(300)
+
     # Fehler beim Speichern
     pg.evaluate("window.__db.failNext={table:'machines',msg:'Netzwerkfehler'}")
     pg.click("#detail >> text=Defekt"); pg.wait_for_timeout(400)
@@ -263,6 +383,23 @@ with sync_playwright() as p:
     pg.locator("#detail .need", has_text="Eigener Eintrag").locator("button", has_text="Sicher").click(); pg.wait_for_timeout(300)
     check("Live: eigener Bedarf geloescht", pg.locator("#detail .need", has_text="Eigener Eintrag").count() == 0)
     check("Live: Mitarbeiter sieht keine Loeschen-Knoepfe", pg.locator("#detail >> text=Löschen").count() == 0 and pg.locator("text=Baustelle löschen").count() == 0)
+    # Mitarbeiter (kein Admin) meldet Material, tippt ein eigenes Material ein und sieht den Absender
+    pg.evaluate("(()=>{const r={id:'ma1',name:'Gartenerde Premium',author:'Chef',created_by:window.__db.profiles.find(p=>p.email=='chef@firma.test').id,created_at:new Date().toISOString()};window.__db.materials.push(r);})()")
+    pg.evaluate("loadAll()"); pg.wait_for_timeout(300)
+    pg.locator('#detail .mrow button:has-text("Material fehlt")').first.click(); pg.wait_for_timeout(100)
+    pg.fill("#matSearch", "gartenerde"); pg.wait_for_timeout(100)
+    check("Mitarbeiter: sieht das Material, das der Chef eingetippt hat, mit Namen", pg.locator("#matList .matrow", has_text="Gartenerde Premium").count() == 1 and "Chef" in pg.inner_text("#matList .matrow >> nth=0"), pg.inner_text("#matList"))
+    check("Mitarbeiter: darf fremde eigene Eintraege nicht loeschen (kein Knopf)", pg.locator("#matList .matrow", has_text="Gartenerde Premium").locator("button", has_text="Löschen").count() == 0)
+    pg.fill("#matSearch", "Splittbett Spezial"); pg.wait_for_timeout(100)
+    pg.click("#modal .matnew button"); pg.click("#matGo"); pg.wait_for_timeout(400)
+    ma = pg.evaluate("window.__db.machines.find(m => m.reason.indexOf('Splittbett') > 0)")
+    check("Mitarbeiter (kein Admin) darf eigenes Material eintippen und damit melden", ma is not None and ma["reported_name"] == "Neuling" and any(x["name"] == "Splittbett Spezial" and x["author"] == "Neuling" for x in pg.evaluate("window.__db.materials")), str(ma))
+    check("Mitarbeiter: sieht an der Maschine, dass er selbst gemeldet hat", "gemeldet von Neuling" in pg.inner_text("#detail"))
+    pg.locator('#detail .mrow button:has-text("Material fehlt")').first.click(); pg.wait_for_timeout(100)
+    pg.fill("#matSearch", "splittbett"); pg.wait_for_timeout(100)
+    check("Mitarbeiter: darf den eigenen Eintrag loeschen", pg.locator("#matList .matrow", has_text="Splittbett Spezial").locator("button", has_text="Löschen").count() == 1)
+    pg.click("#modal >> text=Schliessen")
+    pg.locator("#detail .mrow", has_text="Splittbett").locator("button", has_text="Nachgeliefert").click(); pg.wait_for_timeout(300)
 
     # Admin: Benutzerverwaltung und Loeschen
     pg.click("#logoutBtn"); pg.wait_for_timeout(300)
@@ -296,6 +433,12 @@ with sync_playwright() as p:
     check("Handy: Formular ohne seitliches Scrollen", not mob.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
     mob.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_form_handy.png"))
     mob.click("#modal >> text=Schliessen")
+    mob.locator('#detail .mrow button:has-text("Material fehlt")').first.click(); mob.wait_for_timeout(200)
+    mob.fill("#matSearch", "kies")
+    check("Handy: Materialauswahl ohne seitliches Scrollen", not mob.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
+    check("Handy: Treffer sind grosse Knoepfe (mindestens 40 px hoch)", mob.evaluate("document.querySelector('#matList .matrow button').getBoundingClientRect().height") >= 40)
+    mob.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_material_handy.png"))
+    mob.click("#modal >> text=Schliessen")
     mob.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_handy.png"), full_page=True)
 
     # ============================================================ MODI
@@ -309,7 +452,7 @@ with sync_playwright() as p:
         pg2.route("**/config.js", lambda r: r.fulfill(body="window.APP_CONFIG={};", content_type="application/javascript"))
         init = "Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>%d});Object.defineProperty(navigator,'deviceMemory',{get:()=>%d});" % (cores, mem)
         if saved: init += "try{localStorage.setItem('modus','%s')}catch(e){}" % saved
-        pg2.add_init_script(init + (STUBS if stubs else ""))
+        pg2.add_init_script(NO_RANDOM + init + (STUBS if stubs else ""))
         return pg2
 
     g = raw_page(1280, 800); g.goto(URL); g.wait_for_timeout(300)

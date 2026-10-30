@@ -8,6 +8,11 @@
 --  * Freigegebene Mitarbeiter dürfen Baustellen und Maschinen ansehen, anlegen und ändern.
 --  * Bedarf (was auf einer Baustelle gebraucht wird): Freigegebene schreiben und haken ab,
 --    löschen dürfen der Schreiber selbst und Admins.
+--  * Meldungen an Maschinen (Defekt, Material fehlt, Diesel fehlt): Name der meldenden Person und Zeit
+--    trägt die Datenbank selbst ein, die Seite kann das nicht fälschen.
+--  * Materialien: der grosse Katalog steckt in der Seite (public/materialien.js). Eigene Einträge von
+--    Mitarbeitern stehen in der Tabelle materials und gelten für alle. Freigegebene schreiben, löschen
+--    darf der Schreiber selbst und Admins.
 --  * Löschen von Baustellen und Maschinen und Benutzer verwalten darf nur ein Admin.
 --
 -- Update einer bestehenden Datenbank: diese Datei einfach nochmals ausführen (sie ist wiederholbar).
@@ -44,6 +49,10 @@ create table if not exists public.machines (
   created_by  uuid default auth.uid(),
   updated_at  timestamptz not null default now()
 );
+-- Wer hat die Meldung abgeschickt (Defekt, wartet): setzt der Trigger machines_stamp, nicht die Seite
+alter table public.machines add column if not exists reported_by   uuid;
+alter table public.machines add column if not exists reported_name text not null default '';
+alter table public.machines add column if not exists reported_at   timestamptz;
 
 -- Bedarf je Baustelle: freier Text, zum Beispiel "20 m³ Beton bis Mittwoch"
 create table if not exists public.needs (
@@ -64,6 +73,16 @@ create table if not exists public.activity (
   user_id     uuid default auth.uid(),
   text        text not null check (length(text) between 1 and 300)
 );
+
+-- Eigene Materialien der Mitarbeiter (zusätzlich zum Katalog in der Seite), gelten für alle
+create table if not exists public.materials (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null check (length(trim(name)) between 2 and 60),
+  author      text not null default '' check (length(author) <= 60),
+  created_by  uuid not null default auth.uid(),
+  created_at  timestamptz not null default now()
+);
+create unique index if not exists materials_name_uniq on public.materials (lower(trim(name)));
 
 create index if not exists machines_site_idx on public.machines(site_id);
 create index if not exists needs_site_idx on public.needs(site_id);
@@ -148,6 +167,63 @@ create trigger needs_guard_trg
   before update on public.needs
   for each row execute function public.needs_guard();
 
+-- Absender und Zeit einer Meldung setzt die Datenbank, nie die Seite.
+-- Neue Meldung (Status oder Grund ändert sich auf wartet/defekt): aktuelle Person und Zeit.
+-- Läuft die Maschine wieder oder ist sie im Werkhof: gelöscht. Sonst bleibt alles, wie es war.
+create or replace function public.machines_stamp()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  who text;
+  changed boolean := true;
+begin
+  if tg_op = 'UPDATE' then
+    changed := new.status is distinct from old.status or new.reason is distinct from old.reason;
+    if not changed then
+      new.reported_by := old.reported_by; new.reported_name := old.reported_name; new.reported_at := old.reported_at;
+      return new;
+    end if;
+  end if;
+  if new.status in ('waiting', 'broken') then
+    select coalesce(nullif(trim(name), ''), email, '') into who from public.profiles where id = auth.uid();
+    new.reported_by := auth.uid();
+    new.reported_name := left(coalesce(who, ''), 60);
+    new.reported_at := now();
+  else
+    new.reported_by := null; new.reported_name := ''; new.reported_at := null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists machines_stamp_trg on public.machines;
+create trigger machines_stamp_trg
+  before insert or update on public.machines
+  for each row execute function public.machines_stamp();
+
+-- Eigene Materialien: Name der schreibenden Person setzt die Datenbank, Leerzeichen werden bereinigt
+create or replace function public.materials_stamp()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  who text;
+begin
+  new.name := regexp_replace(trim(new.name), '\s+', ' ', 'g');
+  select coalesce(nullif(trim(name), ''), email, '') into who from public.profiles where id = auth.uid();
+  new.author := left(coalesce(who, ''), 60);
+  return new;
+end;
+$$;
+
+drop trigger if exists materials_stamp_trg on public.materials;
+create trigger materials_stamp_trg
+  before insert on public.materials
+  for each row execute function public.materials_stamp();
+
 drop trigger if exists machines_touch on public.machines;
 create trigger machines_touch
   before update on public.machines
@@ -159,6 +235,7 @@ alter table public.profiles enable row level security;
 alter table public.sites    enable row level security;
 alter table public.machines enable row level security;
 alter table public.needs    enable row level security;
+alter table public.materials enable row level security;
 alter table public.activity enable row level security;
 
 -- Profile: jeder sieht das eigene, Admins sehen alle und verwalten sie
@@ -230,6 +307,20 @@ drop policy if exists needs_delete on public.needs;
 create policy needs_delete on public.needs
   for delete to authenticated using (public.is_admin() or (public.is_approved() and created_by = auth.uid()));
 
+-- Materialien (eigene Einträge): Freigegebene lesen und schreiben (nur als sich selbst), nichts ändern.
+-- Löschen darf der Schreiber selbst oder ein Admin.
+drop policy if exists materials_select on public.materials;
+create policy materials_select on public.materials
+  for select to authenticated using (public.is_approved());
+
+drop policy if exists materials_insert on public.materials;
+create policy materials_insert on public.materials
+  for insert to authenticated with check (public.is_approved() and created_by = auth.uid());
+
+drop policy if exists materials_delete on public.materials;
+create policy materials_delete on public.materials
+  for delete to authenticated using (public.is_admin() or (public.is_approved() and created_by = auth.uid()));
+
 -- Protokoll: lesen und ergänzen, nicht ändern
 drop policy if exists activity_select on public.activity;
 create policy activity_select on public.activity
@@ -240,7 +331,7 @@ create policy activity_insert on public.activity
   for insert to authenticated with check (public.is_approved());
 
 -- Nicht angemeldete Besucher bekommen gar keinen Zugriff
-revoke all on public.profiles, public.sites, public.machines, public.needs, public.activity from anon;
+revoke all on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity from anon;
 revoke execute on function public.is_approved(), public.is_admin() from anon;
 
 -- ---------------------------------------------------------------- Echtzeit
@@ -258,6 +349,10 @@ begin
     end;
     begin
       alter publication supabase_realtime add table public.needs;
+    exception when duplicate_object then null;
+    end;
+    begin
+      alter publication supabase_realtime add table public.materials;
     exception when duplicate_object then null;
     end;
     begin
