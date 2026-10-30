@@ -32,7 +32,7 @@ with sync_playwright() as p:
     # ============================================================ DEMO
     print("=== DEMO-MODUS ===")
     d = new_page(b, False)
-    d.goto(URL); d.wait_for_timeout(800)
+    d.goto(URL + "?modus=3d"); d.wait_for_timeout(800)
     check("Demo: Hinweis sichtbar", d.locator("#demoNote").is_visible())
     check("Demo: kein Login", not d.locator("#auth").is_visible())
     check("Demo: 6 Marker (5 Baustellen + Werkhof)", d.locator("#lmap .lm .site").count() == 6, str(d.locator("#lmap .lm .site").count()))
@@ -116,7 +116,7 @@ with sync_playwright() as p:
     # ============================================================ LIVE
     print("=== LIVE-MODUS (Ersatz-Datenbank) ===")
     pg = new_page(b, True)
-    pg.goto(URL); pg.wait_for_timeout(800)
+    pg.goto(URL + "?modus=3d"); pg.wait_for_timeout(800)
     check("Live: Login-Fenster sichtbar", pg.locator("#auth").is_visible())
     check("Live: keine Demo-Daten", pg.locator("#lmap .lm .site").count() <= 1 and pg.locator("#siteList .item").count() == 0)
     check("Live: kein Demo-Hinweis", not pg.locator("#demoNote").is_visible())
@@ -286,7 +286,7 @@ with sync_playwright() as p:
 
     # Handy-Ansicht
     mob = new_page(b, True, 390, 800)
-    mob.goto(URL); mob.wait_for_timeout(500)
+    mob.goto(URL + "?modus=leicht"); mob.wait_for_timeout(500)
     mob.fill("#aMail", "chef@firma.test"); mob.fill("#aPass", "x")
     check("Handy: Login ohne seitliches Scrollen", not mob.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
     mob.evaluate("window.__db.users['chef@firma.test']={id:'u1',email:'chef@firma.test',password:'langes-passwort'};window.__db.profiles.push({id:'u1',email:'chef@firma.test',name:'Chef',role:'admin',approved:true});window.__db.sites.push({id:'a',name:'Testweg',sparte:'tief',lat:47.23,lng:8.83});window.__db.machines.push({id:'m',name:'Bagger',typ:'Bagger',sparte:'tief',site_id:'a',status:'running',reason:''});")
@@ -297,6 +297,66 @@ with sync_playwright() as p:
     mob.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_form_handy.png"))
     mob.click("#modal >> text=Schliessen")
     mob.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_live_handy.png"), full_page=True)
+
+    # ============================================================ MODI
+    print("=== MODI (Leicht / 3D) ===")
+    def raw_page(w, h, cores=8, mem=8, saved=None, stubs=False, urls=None):
+        ctx = b.new_context(viewport={"width": w, "height": h}, screen={"width": w, "height": h})
+        pg2 = ctx.new_page()
+        pg2.on("pageerror", lambda e: errors.append(str(e)))
+        if urls is not None: pg2.on("request", lambda r: urls.append(r.url))
+        pg2.route("**/unpkg.com/**", lambda r: r.abort())
+        pg2.route("**/config.js", lambda r: r.fulfill(body="window.APP_CONFIG={};", content_type="application/javascript"))
+        init = "Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>%d});Object.defineProperty(navigator,'deviceMemory',{get:()=>%d});" % (cores, mem)
+        if saved: init += "try{localStorage.setItem('modus','%s')}catch(e){}" % saved
+        pg2.add_init_script(init + (STUBS if stubs else ""))
+        return pg2
+
+    g = raw_page(1280, 800); g.goto(URL); g.wait_for_timeout(300)
+    check("Modus: Computer (grosser Bildschirm, 8 Kerne) startet im 3D-Modus", g.evaluate("MODE") == "3d" and g.locator("#modeBtn").inner_text() == "Modus: 3D")
+    g = raw_page(390, 800); g.goto(URL); g.wait_for_timeout(300)
+    check("Modus: Handy (kleiner Bildschirm) startet im Leicht-Modus", g.evaluate("MODE") == "leicht" and g.evaluate("document.body.classList.contains('leicht')"))
+    g = raw_page(1280, 800, cores=2); g.goto(URL); g.wait_for_timeout(300)
+    check("Modus: Geraet mit 2 Kernen startet im Leicht-Modus", g.evaluate("MODE") == "leicht")
+    g = raw_page(1280, 800, mem=2); g.goto(URL); g.wait_for_timeout(300)
+    check("Modus: Geraet mit 2 GB Speicher startet im Leicht-Modus", g.evaluate("MODE") == "leicht")
+    g = raw_page(390, 800, saved="3d"); g.goto(URL); g.wait_for_timeout(300)
+    check("Modus: gespeicherte Wahl gewinnt gegen die Erkennung", g.evaluate("MODE") == "3d")
+    g = raw_page(390, 800, saved="3d"); g.goto(URL + "?modus=leicht"); g.wait_for_timeout(300)
+    check("Modus: Adresszusatz ?modus=leicht gewinnt gegen gespeicherte Wahl", g.evaluate("MODE") == "leicht")
+
+    # Der Leicht-Modus laedt MapLibre gar nicht, der 3D-Modus schon
+    urls = []
+    g = raw_page(1280, 800, urls=urls); g.goto(URL + "?modus=leicht"); g.wait_for_timeout(600)
+    check("Leicht: MapLibre wird nicht geladen, keine Karte", not any("maplibre" in u for u in urls) and g.evaluate("!!lmap") is False and g.locator("canvas").count() == 0)
+    check("Leicht: Skizze mit Szenen ist da (5 Baustellen + Werkhof)", g.locator("#sites .site .scene").count() == 6, str(g.locator("#sites .site .scene").count()))
+    urls3 = []
+    g3 = raw_page(1280, 800, urls=urls3); g3.goto(URL + "?modus=3d"); g3.wait_for_timeout(600)
+    check("3D: MapLibre wird erst im 3D-Modus angefordert", any("maplibre" in u for u in urls3))
+
+    # Umschalten zur Laufzeit (mit Ersatz-Karte)
+    m = raw_page(1280, 800, stubs=True); m.goto(URL + "?modus=3d"); m.wait_for_timeout(700)
+    check("Wechsel: 3D zeigt die Karte mit 6 Markern", m.locator("#lmap .lm .site").count() == 6 and m.locator("#map.real").count() == 1)
+    m.click("#modeBtn"); m.wait_for_timeout(300)
+    check("Wechsel: auf Leicht -> Karte abgebaut, Skizze mit 6 Markern", m.evaluate("!!lmap") is False and m.locator("#lmap .lm").count() == 0 and m.locator("#sites .site").count() == 6 and m.locator("#map.real").count() == 0)
+    check("Wechsel: Knopf zeigt Leicht, Wahl wird gemerkt", m.locator("#modeBtn").inner_text() == "Modus: Leicht" and m.evaluate("localStorage.getItem('modus')") == "leicht")
+    check("Wechsel: Auswahl der Baustelle bleibt", m.locator("#detail strong").inner_text() == "Kanal Bahnhofstr.")
+    m.click("#modeBtn"); m.wait_for_timeout(500)
+    check("Wechsel: zurueck auf 3D -> Karte wieder da", m.evaluate("!!lmap") is True and m.locator("#lmap .lm .site").count() == 6)
+    m.click("#modeBtn"); m.goto(URL); m.wait_for_timeout(500)
+    check("Wechsel: nach Neuladen bleibt Leicht (gemerkt)", m.evaluate("MODE") == "leicht")
+
+    # Leicht-Modus: bei vielen Baustellen werden Szenen erst beim Hinscrollen gezeichnet
+    l = raw_page(390, 700, stubs=True); l.goto(URL + "?modus=leicht"); l.wait_for_timeout(500)
+    l.evaluate("""(()=>{ for(let i=0;i<14;i++) sites.push({id:'z'+i,name:'Zusatz '+i,sparte:'tief',lat:47.2+i/100,lng:8.8}); render(); })()""")
+    l.wait_for_timeout(300)
+    ph = l.locator("#sites .site .scene-ph").count()
+    check("Leicht: viele Baustellen -> Szenen ausserhalb des Bildschirms sind noch Platzhalter", ph > 0 and l.locator("#sites .site .scene:not(.scene-ph)").count() > 0, str(ph))
+    for i in range(14):                                    # wie ein Mensch: schrittweise nach unten scrollen
+        l.evaluate("window.scrollBy(0, 300)"); l.wait_for_timeout(150)
+    l.wait_for_timeout(300)
+    check("Leicht: nach dem Hinscrollen sind alle Szenen gezeichnet", l.locator("#sites .site .scene-ph").count() == 0, str(l.locator("#sites .site .scene-ph").count()))
+    check("Leicht: Handy ohne seitliches Scrollen", not l.evaluate("document.documentElement.scrollWidth > window.innerWidth"))
     b.close()
 
 print()

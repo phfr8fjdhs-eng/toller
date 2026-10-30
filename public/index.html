@@ -4,8 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Baustellen-Dashboard</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
 <style>
@@ -69,6 +67,9 @@
   .scene .mach.off{opacity:.6}
   .scene .mach.broken{animation:blink .8s infinite}
   .info{font-size:11px;color:var(--muted);margin-top:2px}
+  .scene-ph{aspect-ratio:190/86;background:#1d2631}
+  body.leicht *{transition:none!important}
+  body.leicht .scene .mach.broken{animation:none}
   .badge{font-size:11px;font-weight:700;border:1px solid var(--sel);color:var(--sel);border-radius:999px;padding:0 7px;flex:none}
   .needadd{display:flex;gap:8px;margin:6px 0}
   .needadd input{flex:1;min-width:0}
@@ -175,6 +176,7 @@
   <div class="btns">
     <button id="addSiteBtn" class="primary">+ Baustelle</button>
     <button id="addMachineBtn">+ Maschine</button>
+    <button id="modeBtn" title="Leicht: ohne Karte und 3D, spart Arbeitsspeicher und Daten (für ältere Handys). 3D: Karte und 3D-Ansicht der Baustelle (für Computer)."></button>
     <button id="usersBtn" hidden>Benutzer</button>
     <button id="failBtn" hidden>Störung simulieren</button>
     <span id="userChip" class="muted" hidden></span>
@@ -188,7 +190,7 @@
     <div id="map">
       <div id="lmap"></div>
       <div class="mapbtns">
-        <button id="btn3d" class="active">3D</button>
+        <button id="btn3d" class="active">Gelände 3D</button>
         <button id="btnOverview">Übersicht</button>
       </div>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -257,6 +259,61 @@ const TAG = { garten:"G", strasse:"S", tief:"T" };
 const LABEL = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Im Werkhof" };
 const SHORT = { running:"Läuft", waiting:"Wartet", broken:"Defekt", off:"Werkhof" };
 const TYPEN = ["Bagger","Minibagger","Dumper","Walze","Fertiger","LKW","Radlader","Teleskoplader","Rüttelplatte","Mäher"];
+
+/* =============================================================== Modus: Leicht oder 3D
+   Leicht: keine Karte, kein 3D, Szenen werden erst beim Hinscrollen gezeichnet. Spart Arbeitsspeicher und Daten (ältere Handys).
+   3D: Karte mit Gelände und 3D-Ansicht der Baustelle (Computer). Die Bibliotheken dafür werden erst im 3D-Modus geladen.
+   Beim ersten Öffnen wählt die Seite nach Gerät (kleiner Bildschirm, wenig Speicher, Datensparmodus -> Leicht).
+   Die Wahl per Knopf wird auf dem Gerät gemerkt. Zum Ausprobieren: Adresse mit ?modus=leicht oder ?modus=3d. */
+const MAPLIBRE_JS = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js";
+const MAPLIBRE_CSS = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css";
+let MODE = "3d";
+const pendingLoads = {};
+function loadScript(url){
+  if(!pendingLoads[url]){
+    pendingLoads[url] = new Promise(res=>{
+      const sc = document.createElement("script");
+      sc.src = url; sc.onload = ()=>res(true);
+      sc.onerror = ()=>{ delete pendingLoads[url]; res(false); };
+      document.head.appendChild(sc);
+    });
+  }
+  return pendingLoads[url];
+}
+function loadCss(url){
+  if(document.querySelector('link[href="' + url + '"]')) return;
+  const l = document.createElement("link"); l.rel = "stylesheet"; l.href = url; document.head.appendChild(l);
+}
+async function loadMapLibre(){
+  if(window.maplibregl) return true;
+  loadCss(MAPLIBRE_CSS);
+  return (await loadScript(MAPLIBRE_JS)) && !!window.maplibregl;
+}
+function detectMode(){
+  const q = new URLSearchParams(location.search).get("modus");
+  if(q === "leicht" || q === "3d") return q;
+  try{ const v = localStorage.getItem("modus"); if(v === "leicht" || v === "3d") return v; }catch(e){}
+  const small = Math.min(screen.width || 9999, screen.height || 9999) < 700;           // Handy
+  const lowMem = !!navigator.deviceMemory && navigator.deviceMemory <= 2;
+  const lowCpu = !!navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2;
+  const saveData = !!(navigator.connection && navigator.connection.saveData);
+  return (small || lowMem || lowCpu || saveData) ? "leicht" : "3d";
+}
+function setMode(m, persist){
+  MODE = m;
+  document.body.classList.toggle("leicht", m === "leicht");
+  const b = $("modeBtn");
+  b.textContent = m === "leicht" ? "Modus: Leicht" : "Modus: 3D";
+  b.setAttribute("aria-label", "Modus wechseln, jetzt " + (m === "leicht" ? "Leicht" : "3D"));
+  if(persist){ try{ localStorage.setItem("modus", m); }catch(e){} }
+  if(m === "leicht"){
+    if(typeof close3D === "function") close3D();
+    if(lmap) fallbackToSketch();                       // Karte abbauen, gibt Arbeitsspeicher frei
+  } else if(!lmap){
+    initRealMap();
+  }
+  render();
+}
 
 const DEPOT = { id:"depot", name:"Werkhof", sparte:null, lat:CFG.depot.lat, lng:CFG.depot.lng };
 
@@ -703,6 +760,24 @@ function buildScene(s, ms, isDepot, needCount){
 }
 
 /* =============================================================== Anzeige */
+// Leicht-Modus auf der Skizze: bei vielen Baustellen werden die Szenen erst gezeichnet, wenn sie in die Nähe des Bildschirms kommen
+let sceneObs = null;
+const seenScenes = new Set();     // Szenen, die schon einmal in der Nähe waren, werden danach sofort gebaut (kein Flackern beim Neuzeichnen)
+function lazyScene(build, id){
+  if(MODE !== "leicht" || lmap || sites.length <= 6 || typeof IntersectionObserver === "undefined" || seenScenes.has(id)) return build();
+  const ph = el("div", "scene scene-ph");
+  sceneObs = sceneObs || new IntersectionObserver(entries=>{
+    entries.forEach(en=>{
+      if(!en.isIntersecting) return;
+      sceneObs.unobserve(en.target);
+      if(en.target._fill) en.target._fill();
+    });
+  }, { rootMargin:"300px" });
+  ph._fill = ()=>{ seenScenes.add(id); if(ph.isConnected) ph.replaceWith(build()); };
+  sceneObs.observe(ph);
+  return ph;
+}
+
 function marker(s, isDepot){
   const ms = machines.filter(m => loc(m) === s.id);
   const st = isDepot ? "off" : siteStatus(s);
@@ -714,7 +789,7 @@ function marker(s, isDepot){
   d.style.top = p.y + "%";
 
   const nOpen = isDepot ? 0 : openNeeds(s.id).length;
-  d.appendChild(buildScene(s, ms, isDepot, nOpen));
+  d.appendChild(lazyScene(()=>buildScene(s, ms, isDepot, nOpen), s.id));
 
   const top = el("div", "top");
   if(s.sparte) top.appendChild(el("span", "tag", TAG[s.sparte]));
@@ -886,6 +961,7 @@ function render(){
     syncRealMarkers();
   } else {
     const layer = $("sites");
+    if(sceneObs) sceneObs.disconnect();                 // alte Platzhalter nicht weiter beobachten
     layer.innerHTML = "";
     sites.forEach(s => layer.appendChild(marker(s, false)));
     layer.appendChild(marker(DEPOT, true));
@@ -982,8 +1058,10 @@ function updateCompact(){
   $("lmap").classList.toggle("compact", lmap.getZoom() < 12.3 && sites.length > 6);
 }
 
-function initRealMap(){
-  if(typeof maplibregl === "undefined") return;          // ohne Internet bleibt die Skizze
+async function initRealMap(){
+  if(MODE !== "3d" || lmap) return;
+  if(!(await loadMapLibre())) return;                    // ohne Internet bleibt die Skizze
+  if(MODE !== "3d" || lmap) return;                      // inzwischen umgestellt
   try{
     $("map").classList.add("real");
     lmap = new maplibregl.Map({
@@ -1438,6 +1516,14 @@ $("filters").onclick = e=>{
 renderFilters();
 $("siteSearch").addEventListener("input", renderList);
 $("btn3d").onclick = ()=>set3D(!is3D);
+function initMode(){
+  $("modeBtn").onclick = ()=>{
+    const next = MODE === "leicht" ? "3d" : "leicht";
+    setMode(next, true);
+    toast(next === "leicht" ? "Leicht-Modus: ohne Karte und 3D, spart Arbeitsspeicher." : "3D-Modus: Karte und 3D-Ansicht der Baustelle. Wenn es ruckelt, auf Leicht stellen.");
+  };
+  setMode(detectMode(), false);
+}
 $("btnOverview").onclick = ()=>showOverview();
 $("addSiteBtn").onclick = ()=>modalSite();
 $("addMachineBtn").onclick = ()=>modalMachine();
@@ -1452,14 +1538,14 @@ if(LIVE){
   $("failBtn").hidden = true;
   $("incidents").hidden = true;
   // Hinzufügen ist erst nach der Anmeldung möglich: bis dahin Overlay
-  initRealMap();
+  initMode();
   render();
   startLive();
 } else {
   $("demoNote").hidden = false;
   $("failBtn").hidden = false;
   loadDemo();
-  initRealMap();
+  initMode();
   render();
   setInterval(tick, 1500);
 }
