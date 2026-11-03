@@ -412,6 +412,13 @@ revoke insert, update, delete, truncate on public.downtimes from anon, authentic
 revoke all on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity, public.downtimes from anon;
 revoke execute on function public.is_approved(), public.is_admin() from anon;
 
+-- Rechte fuer angemeldete Benutzer ausdruecklich setzen (noetig, wenn Supabase neue Tabellen nicht automatisch freigibt).
+-- Was jemand wirklich darf, bestimmen die Regeln (RLS) oben. downtimes bleibt nur lesbar.
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity to authenticated;
+grant select on public.downtimes to authenticated;
+grant execute on function public.is_approved(), public.is_admin() to authenticated;
+
 -- ---------------------------------------------------------------- Echtzeit
 
 do $$
