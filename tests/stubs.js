@@ -50,6 +50,8 @@
       this.setPaintProperty = function(id, k, v){ if(layers[id]) layers[id].paint[k] = v; };
       this.queryRenderedFeatures = function(){ return window.__mapHit || []; };
       this.getCanvas = function(){ return document.createElement("canvas"); };
+      const images = window.__mapImages = {};
+      this.addImage = function(id, img){ images[id] = img; }; this.hasImage = function(id){ return id in images; };
       this.setTerrain = function(){}; this.easeTo = function(){};
       this.fitBounds = function(){ window.__fits = (window.__fits || 0) + 1; };
       this.flyTo = function(o){ window.__fly = o.center.join(","); };
@@ -68,12 +70,13 @@
   };
   window.__mapClick = function(lat, lng){ (handlers.click || []).forEach(cb => cb({ lngLat:{ lat, lng } })); };
   // Klick auf eine Baustelle der Karte (Fläche oder Punkt)
+  window.__mapClickFeature = function(props){ window.__mapHit = [{ properties:props }]; (handlers.click || []).forEach(cb => cb({ lngLat:{ lat:0, lng:0 }, point:{ x:1, y:1 } })); window.__mapHit = []; };
   window.__mapClickSite = function(id){ window.__mapHit = [{ properties:{ id } }]; (handlers.click || []).forEach(cb => cb({ lngLat:{ lat:0, lng:0 }, point:{ x:1, y:1 } })); window.__mapHit = []; };
   // Baustellen, wie die Karte sie gerade zeigt
   window.__mapSites = function(){ const d = window.__mapData && window.__mapData["site-pts"]; return d ? d.features.map(f => f.properties) : []; };
 
   // ---- Supabase
-  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], downtimes:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };
+  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], downtimes:[], drawings:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };
   const nid = () => "id" + (db.seq++);
   const me = () => db.session ? db.profiles.find(p => p.id === db.session.user.id) : null;
   const approved = () => { const m = me(); return !!(m && m.approved); };
@@ -130,6 +133,7 @@
         if((this.op === "insert" || this.op === "update") && this.row && "weitere_sparten" in this.row) return colErr;
       }
       const T = db[this.t];
+      if(!T) return { data:null, error:{ code:"42P01", message:"relation \"public." + this.t + "\" does not exist" } };   // Tabelle fehlt (altes schema.sql)
       const isProf = this.t === "profiles";
       const canRead = isProf ? (r => admin() || (me() && r.id === me().id)) : (() => approved());
       const rls = { message:"new row violates row-level security policy" };
@@ -147,6 +151,11 @@
             if(T.some(x => x.name.toLowerCase() === row.name.toLowerCase())) return { data:null, error:{ code:"23505", message:"duplicate key value violates unique constraint" } };
           }
           if(this.t === "machines") stamp(row, null);
+          if(this.t === "drawings"){                                          // wie der Trigger drawings_stamp und die Pruefung
+            row.author = me().name; row.created_by = me().id;
+            const ok = { baum:"Point", strasse:"LineString", wasser:"LineString", abwasser:"LineString", gas:"LineString", strom:"LineString", kabel:"LineString", hecke:"LineString", bereich:"Polygon", rasen:"Polygon", belag:"Polygon" }[row.kind];
+            if(!row.geom || row.geom.type !== ok) return { data:null, error:{ message:"new row violates check constraint drawings_geom_ok" } };
+          }
           made.push(row);
         }
         made.forEach(row => { T.push(row); if(this.t === "machines") track(row, null, "insert"); emit(this.t, "INSERT", row); });
@@ -155,12 +164,13 @@
       if(this.op === "update"){
         if(isProf ? !admin() : !approved()) return { data:[], error:null };
         if(this.t === "materials") return { data:[], error:null };           // Materialien lassen sich nicht aendern
+        if(this.t === "drawings") return { data:null, error:{ message:"permission denied for table drawings" } };   // nie aendern
         rows.forEach(r => { const old = Object.assign({}, r); Object.assign(r, this.row); if(this.t === "machines"){ stamp(r, old); track(r, old, "update"); } emit(this.t, "UPDATE", r, old); });
         if(this.one) return rows.length === 1 ? { data:rows[0], error:null } : { data:null, error:{ message:"JSON object requested, multiple (or no) rows returned" } };
         return { data:rows, error:null };
       }
       if(this.op === "delete"){
-        if(this.t === "needs" || this.t === "materials") rows = rows.filter(r => admin() || r.created_by === (me() || {}).id);   // Schreiber oder Admin
+        if(this.t === "needs" || this.t === "materials" || this.t === "drawings") rows = rows.filter(r => admin() || r.created_by === (me() || {}).id);   // Schreiber oder Admin
         else if(!admin()) return { data:[], error:null };
         rows.forEach(r => { if(this.t === "machines") track(null, r, "delete"); T.splice(T.indexOf(r), 1); emit(this.t, "DELETE", null, { id:r.id }); });
         return { data:rows, error:null };

@@ -13,6 +13,8 @@
 --  * Materialien: der grosse Katalog steckt in der Seite (public/materialien.js). Eigene Einträge von
 --    Mitarbeitern stehen in der Tabelle materials und gelten für alle. Freigegebene schreiben, löschen
 --    darf der Schreiber selbst und Admins.
+--  * Zeichnungen auf der Karte (Strassen, Leitungen, Bäume, Flächen): Freigegebene lesen und zeichnen,
+--    löschen darf der Zeichner selbst und Admins. Nur eine Skizze, keine Vermessung.
 --  * Löschen von Baustellen und Maschinen und Benutzer verwalten darf nur ein Admin.
 --
 -- Update einer bestehenden Datenbank: diese Datei einfach nochmals ausführen (sie ist wiederholbar).
@@ -95,6 +97,21 @@ create index if not exists machines_site_idx on public.machines(site_id);
 create index if not exists needs_site_idx on public.needs(site_id);
 create index if not exists activity_created_idx on public.activity(created_at desc);
 
+-- Zeichnungen auf der Karte je Baustelle: Linien (Strasse, Leitungen, Hecke), Punkte (Baum), Flächen.
+-- geom ist eine GeoJSON-Geometrie [Längengrad, Breitengrad]. Nur eine Skizze zur Übersicht, keine Vermessung:
+-- gezeichnete Leitungen ersetzen keinen Werkleitungsplan.
+create table if not exists public.drawings (
+  id          uuid primary key default gen_random_uuid(),
+  site_id     uuid not null references public.sites(id) on delete cascade,
+  kind        text not null,
+  geom        jsonb not null,
+  label       text not null default '' check (length(label) <= 60),
+  author      text not null default '' check (length(author) <= 60),
+  created_by  uuid not null default auth.uid(),
+  created_at  timestamptz not null default now()
+);
+create index if not exists drawings_site_idx on public.drawings(site_id);
+
 -- ---------------------------------------------------------------- Hilfsfunktionen
 
 create or replace function public.is_approved()
@@ -103,6 +120,64 @@ language sql security definer stable
 set search_path = public
 as $$
   select exists (select 1 from public.profiles where id = auth.uid() and approved);
+$$;
+
+-- Eine Position [Längengrad, Breitengrad] als Zahlen im gültigen Bereich (CASE prüft der Reihe nach, nie ein Fehler)
+create or replace function public.drawing_pos_ok(p jsonb)
+returns boolean
+language sql immutable
+set search_path = public
+as $$
+  select case
+    when p is null or jsonb_typeof(p) <> 'array' then false
+    when jsonb_array_length(p) <> 2 then false
+    when jsonb_typeof(p->0) <> 'number' or jsonb_typeof(p->1) <> 'number' then false
+    else (p->>0)::float8 between -180 and 180 and (p->>1)::float8 between -90 and 90
+  end;
+$$;
+
+-- Passt die Geometrie zur Art? Baum = Punkt, Linien = 2 bis 500 Punkte, Flächen = ein geschlossener Ring mit 3 bis 500 Ecken
+create or replace function public.drawing_ok(k text, g jsonb)
+returns boolean
+language plpgsql immutable
+set search_path = public
+as $$
+declare
+  t text;
+  c jsonb;
+  ring jsonb;
+  p jsonb;
+  n int;
+begin
+  if g is null or jsonb_typeof(g) <> 'object' then return false; end if;
+  if octet_length(g::text) > 40000 then return false; end if;
+  t := g->>'type';
+  c := g->'coordinates';
+  if c is null or jsonb_typeof(c) <> 'array' then return false; end if;
+  if k = 'baum' then
+    return t = 'Point' and public.drawing_pos_ok(c);
+  elsif k in ('strasse', 'wasser', 'abwasser', 'gas', 'strom', 'kabel', 'hecke') then
+    if t is distinct from 'LineString' then return false; end if;
+    n := jsonb_array_length(c);
+    if n < 2 or n > 500 then return false; end if;
+    for p in select value from jsonb_array_elements(c) loop
+      if not public.drawing_pos_ok(p) then return false; end if;
+    end loop;
+    return true;
+  elsif k in ('bereich', 'rasen', 'belag') then
+    if t is distinct from 'Polygon' or jsonb_array_length(c) <> 1 then return false; end if;
+    ring := c->0;
+    if jsonb_typeof(ring) <> 'array' then return false; end if;
+    n := jsonb_array_length(ring);
+    if n < 4 or n > 501 then return false; end if;
+    if ring->0 is distinct from ring->(n - 1) then return false; end if;
+    for p in select value from jsonb_array_elements(ring) loop
+      if not public.drawing_pos_ok(p) then return false; end if;
+    end loop;
+    return true;
+  end if;
+  return false;
+end;
 $$;
 
 create or replace function public.is_admin()
@@ -196,6 +271,30 @@ create trigger sites_sparten_trg
   before insert or update on public.sites
   for each row execute function public.sites_sparten();
 
+-- Zeichnungen: Art und Geometrie werden geprüft, Name des Zeichners setzt die Datenbank
+alter table public.drawings drop constraint if exists drawings_geom_ok;
+alter table public.drawings add constraint drawings_geom_ok check (public.drawing_ok(kind, geom));
+
+create or replace function public.drawings_stamp()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  who text;
+begin
+  new.label := left(regexp_replace(trim(coalesce(new.label, '')), '\s+', ' ', 'g'), 60);
+  select coalesce(nullif(trim(name), ''), email, '') into who from public.profiles where id = auth.uid();
+  new.author := left(coalesce(who, ''), 60);
+  return new;
+end;
+$$;
+
+drop trigger if exists drawings_stamp_trg on public.drawings;
+create trigger drawings_stamp_trg
+  before insert on public.drawings
+  for each row execute function public.drawings_stamp();
+
 -- Absender und Zeit einer Meldung setzt die Datenbank, nie die Seite.
 -- Neue Meldung (Status oder Grund ändert sich auf wartet/defekt): aktuelle Person und Zeit.
 -- Läuft die Maschine wieder oder ist sie im Werkhof: gelöscht. Sonst bleibt alles, wie es war.
@@ -266,6 +365,7 @@ alter table public.machines enable row level security;
 alter table public.needs    enable row level security;
 alter table public.materials enable row level security;
 alter table public.activity enable row level security;
+alter table public.drawings enable row level security;
 
 -- Profile: jeder sieht das eigene, Admins sehen alle und verwalten sie
 drop policy if exists profiles_select on public.profiles;
@@ -359,6 +459,20 @@ drop policy if exists activity_insert on public.activity;
 create policy activity_insert on public.activity
   for insert to authenticated with check (public.is_approved());
 
+-- Zeichnungen: Freigegebene lesen und zeichnen (nur als sich selbst), nichts ändern.
+-- Löschen darf der Zeichner selbst oder ein Admin.
+drop policy if exists drawings_select on public.drawings;
+create policy drawings_select on public.drawings
+  for select to authenticated using (public.is_approved());
+
+drop policy if exists drawings_insert on public.drawings;
+create policy drawings_insert on public.drawings
+  for insert to authenticated with check (public.is_approved() and created_by = auth.uid());
+
+drop policy if exists drawings_delete on public.drawings;
+create policy drawings_delete on public.drawings
+  for delete to authenticated using (public.is_admin() or (public.is_approved() and created_by = auth.uid()));
+
 -- ---------------------------------------------------------------- Störungsverlauf
 -- Jede Störung (Defekt) und jede Wartezeit (Material oder Diesel fehlt) wird von der Datenbank mitgeschrieben:
 -- Beginn = Meldung, Ende = "Repariert", "Nachgeliefert", "Getankt" oder Maschine gelöscht. Niemand schreibt von Hand hinein,
@@ -438,7 +552,7 @@ create policy downtimes_select on public.downtimes
 revoke insert, update, delete, truncate on public.downtimes from anon, authenticated;
 
 -- Nicht angemeldete Besucher bekommen gar keinen Zugriff
-revoke all on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity, public.downtimes from anon;
+revoke all on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity, public.downtimes, public.drawings from anon;
 revoke execute on function public.is_approved(), public.is_admin() from anon;
 
 -- Rechte fuer angemeldete Benutzer ausdruecklich setzen (noetig, wenn Supabase neue Tabellen nicht automatisch freigibt).
@@ -446,6 +560,8 @@ revoke execute on function public.is_approved(), public.is_admin() from anon;
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity to authenticated;
 grant select on public.downtimes to authenticated;
+grant select, insert, delete on public.drawings to authenticated;     -- Zeichnungen werden nie geändert, nur gelöscht und neu gezeichnet
+revoke update, truncate on public.drawings from authenticated;
 grant execute on function public.is_approved(), public.is_admin() to authenticated;
 
 -- ---------------------------------------------------------------- Echtzeit
@@ -471,6 +587,10 @@ begin
     end;
     begin
       alter publication supabase_realtime add table public.activity;
+    exception when duplicate_object then null;
+    end;
+    begin
+      alter publication supabase_realtime add table public.drawings;
     exception when duplicate_object then null;
     end;
   end if;

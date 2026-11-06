@@ -306,6 +306,50 @@ out=$(as_user $U2 "update public.sites set weitere_sparten='{tief}' where id='$M
 expect_not "Weitere Sparten: nicht freigegebene Person kann nichts ändern" "$MIX" "$out"
 expect_eq "Weitere Sparten: Wert ist danach unverändert" "{}" "$($P -c "select weitere_sparten from public.sites where id='$MIX'")"
 
+# ---------------------------------------------------------------- Zeichnungen auf der Karte
+echo
+echo "=== Zeichnungen (drawings) ==="
+DSITE=$(as_user $U3 "insert into public.sites(name,sparte,lat,lng) values ('Zeichenplatz','tief',47.23,8.84) returning id;" | tail -1)
+LINE='{"type":"LineString","coordinates":[[8.84,47.23],[8.841,47.231],[8.842,47.2305]]}'
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom,label) values ('$DSITE','wasser','$LINE','  DN   150 ') returning author||'|'||label||'|'||(created_by='$U3');")
+expect_eq "Zeichnung: Mitarbeiter zeichnet Wasserleitung, Name setzt die Datenbank, Bezeichnung bereinigt" "ma|DN 150|true" "$(echo "$out" | tail -1)"
+DRW=$($P -c "select id from public.drawings where kind='wasser' limit 1")
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','baum','{\"type\":\"Point\",\"coordinates\":[8.84,47.23]}') returning kind;")
+expect_eq "Zeichnung: Baum als Punkt" "baum" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','bereich','{\"type\":\"Polygon\",\"coordinates\":[[[8.84,47.23],[8.841,47.23],[8.841,47.231],[8.84,47.23]]]}') returning kind;")
+expect_eq "Zeichnung: Baustellenbereich als geschlossene Fläche" "bereich" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','baum','$LINE');")
+expect "Zeichnung: Baum als Linie wird abgelehnt (Art passt nicht zur Geometrie)" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','gas','{\"type\":\"LineString\",\"coordinates\":[[8.84,47.23]]}');")
+expect "Zeichnung: Linie mit nur einem Punkt wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','gas','{\"type\":\"LineString\",\"coordinates\":[[8.84,47.23],[\"x\",47.2]]}');")
+expect "Zeichnung: Text statt Zahl wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','strom','{\"type\":\"LineString\",\"coordinates\":[[8.84,47.23],[8.84,95]]}');")
+expect "Zeichnung: Breitengrad ausserhalb wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','rasen','{\"type\":\"Polygon\",\"coordinates\":[[[8.84,47.23],[8.841,47.23],[8.841,47.231],[8.842,47.24]]]}');")
+expect "Zeichnung: offene Fläche (nicht geschlossen) wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','hochbau','$LINE');")
+expect "Zeichnung: unbekannte Art wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom,created_by) values ('$DSITE','gas','$LINE','$U1');")
+expect "Zeichnung: Zeichner kann nicht gefälscht werden" "row-level security" "$out"
+out=$(as_user $U2 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','gas','$LINE');")
+expect "Zeichnung: nicht freigegebene Person kann nicht zeichnen" "row-level security" "$out"
+expect_eq "Zeichnung: nicht freigegebene Person sieht keine Zeichnungen" "0" "$(as_user $U2 "select count(*) from public.drawings;" | tail -1)"
+expect "Zeichnung: nicht angemeldet kein Zugriff" "permission denied" "$(as_anon "select count(*) from public.drawings;")"
+out=$(as_user $U3 "update public.drawings set label='geändert' where id='$DRW';")
+expect "Zeichnung: ändern ist nicht erlaubt (nur löschen und neu zeichnen)" "permission denied" "$out"
+out=$(as_user $U4 "delete from public.drawings where id='$DRW' returning id;")
+expect_not "Zeichnung: anderer Mitarbeiter kann fremde Zeichnung nicht löschen" "$DRW" "$out"
+out=$(as_user $U3 "delete from public.drawings where id='$DRW' returning id;")
+expect "Zeichnung: Zeichner löscht seine Zeichnung" "$DRW" "$out"
+BAUM=$($P -c "select id from public.drawings where kind='baum' limit 1")
+out=$(as_user $U1 "delete from public.drawings where id='$BAUM' returning id;")
+expect "Zeichnung: Admin löscht fremde Zeichnung" "$BAUM" "$out"
+TMP=$(as_user $U3 "insert into public.sites(name,sparte,lat,lng) values ('Mit Zeichnung','tief',47.2,8.8) returning id;" | tail -1)
+as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$TMP','kabel','$LINE');" >/dev/null
+as_user $U1 "delete from public.sites where id='$TMP';" >/dev/null
+expect_eq "Zeichnung: mit der Baustelle verschwinden auch ihre Zeichnungen" "0" "$($P -c "select count(*) from public.drawings where site_id='$TMP'")"
+
 # ---------------------------------------------------------------- Update einer bestehenden (alten) Datenbank
 echo
 echo "=== Update einer alten Datenbank (mit Prozent-Spalten) ==="
@@ -318,6 +362,7 @@ expect_eq "Alte Datenbank hat noch keine Tabelle needs" "t" "$($PA -c "select to
 out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
 expect_not "Update: neues schema.sql läuft ohne Fehler über die alte Datenbank" "ERROR" "$out"
 expect_eq "Update: Tabelle needs ist da" "t" "$($PA -c "select to_regclass('public.needs') is not null")"
+expect_eq "Update: Tabelle drawings ist da" "t" "$($PA -c "select to_regclass('public.drawings') is not null")"
 expect_eq "Update: Tabelle materials ist da" "t" "$($PA -c "select to_regclass('public.materials') is not null")"
 expect_eq "Update: Tabelle downtimes ist da, offene Einträge stimmen mit den gestörten Maschinen überein" "t" "$($PA -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
 expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"

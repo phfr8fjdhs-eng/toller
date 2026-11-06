@@ -19,6 +19,7 @@ Solange du das nicht gemacht hast, läuft die Seite im **Demo-Modus** mit erfund
 2. Auf GitHub die Datei `supabase/schema.sql` öffnen, alles kopieren (Knopf "Copy raw file"), in Supabase einfügen und auf **Run** klicken.
 3. Es sollte "Success" erscheinen. Das Schema lässt sich gefahrlos ein zweites Mal ausführen.
    **Update einer schon eingerichteten Datenbank** (zum Beispiel für den neuen Bedarf auf den Baustellen): `schema.sql` einfach noch einmal ausführen. Bestehende Daten bleiben erhalten.
+   Nötig auch für die weiteren Sparten einer Baustelle und für das Zeichnen auf der Karte (neue Tabelle `drawings`).
    Solange das nicht gemacht ist, läuft die Seite weiter und zeigt beim Bedarf den Hinweis "Datenbank-Update nötig". Bei "Material fehlt" gehen Katalog und Meldung trotzdem, nur eigene Materialien werden noch nicht für alle gespeichert und der Absender einer Meldung fehlt.
    Wer eine Meldung abgeschickt hat, trägt die Datenbank selbst ein (Name aus dem Profil). Das lässt sich von der Seite aus nicht fälschen.
 4. Optional: Dasselbe mit `supabase/beispieldaten.sql`, wenn du Beispielbaustellen zum Ausprobieren willst.
