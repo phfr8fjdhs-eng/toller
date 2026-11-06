@@ -114,6 +114,21 @@
   .empty{color:var(--muted);font-size:13px}
   .log{font-size:12px;color:var(--muted);padding:3px 0}
   .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  #siteTableBox{margin-top:12px}
+  .stab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+  .stab th{color:var(--muted);font-weight:600;font-size:12px;text-align:right;padding:8px 6px;border-bottom:1px solid var(--line);width:62px}
+  .stab th:first-child{text-align:left;width:auto}
+  .stab td{padding:8px 6px;border-top:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums;vertical-align:middle}
+  .stab td:first-child{text-align:left}
+  .stab tbody tr{cursor:pointer;height:48px}
+  .stab tbody tr:hover td{background:#202a35}
+  .stab tbody tr.sel td{background:#16324f}
+  .stab tr:focus-visible{outline:2px solid var(--sel);outline-offset:-2px}
+  .stab .snm{display:flex;align-items:center;gap:6px;min-width:0}
+  .stab .snm span:last-child{overflow-wrap:anywhere;font-weight:600}
+  .stab .sst{font-size:12px;color:var(--muted);margin-top:2px}
+  .stab .zero{color:var(--muted)}
+  @media(max-width:600px){.stab th{width:46px;padding:8px 3px;font-size:11px}.stab td{padding:8px 3px}}
   #siteList{max-height:300px;overflow:auto;margin-top:8px}
   input,select,textarea{background:#0f1419;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;width:100%}
   input[type=number]{width:auto}
@@ -249,6 +264,10 @@
       <span class="chip"><span class="dot broken"></span>Defekt</span>
       <span class="chip"><span class="dot off"></span>Im Werkhof</span>
       <span class="chip"><span class="tag">G</span><span class="tag">S</span><span class="tag">T</span>Garten / Strasse / Tief</span>
+    </div>
+    <div id="siteTableBox" class="panel" hidden>
+      <h2>Baustellen auf der Karte</h2>
+      <div id="siteTable"></div>
     </div>
   </section>
   <aside>
@@ -1063,6 +1082,50 @@ function renderList(){
   if(list.length > 100) box.appendChild(el("div", "empty", "… und " + (list.length - 100) + " weitere. Nutze die Suche."));
 }
 
+// Tabelle unter der Karte: alle Baustellen (Sparten-Filter) mit Status, Maschinen und offenem Bedarf.
+// Nur wenn die echte Karte offen ist; im Leicht-Modus und in der Skizze sind die Baustellen schon als Karten sichtbar.
+function renderSiteTable(){
+  const wrap = $("siteTableBox"), box = $("siteTable");
+  box.innerHTML = "";
+  wrap.hidden = !lmap;
+  if(!lmap) return;
+  const list = sites.filter(s => showSparte(s.sparte));
+  list.sort((a, b) => RANK[siteStatus(a)] - RANK[siteStatus(b)] || a.name.localeCompare(b.name, "de"));
+  if(!list.length){
+    box.appendChild(el("div", "empty", sites.length ? "Keine Baustelle in dieser Sparte." : "Noch keine Baustellen."));
+    return;
+  }
+  const t = el("table", "stab"), head = el("tr");
+  [["Baustelle", ""], ["Läuft", "Maschinen, die laufen"], ["Wartet", "Maschinen, die auf Material oder Diesel warten"],
+   ["Defekt", "Maschinen mit Störung"], ["Bedarf", "Offene Bedarfszeilen"]].forEach(h=>{
+    const th = el("th", "", h[0]); th.scope = "col"; if(h[1]) th.title = h[1]; head.appendChild(th);
+  });
+  const thead = el("thead"); thead.appendChild(head); t.appendChild(thead);
+  const tb = el("tbody");
+  list.slice(0, 100).forEach(s=>{
+    const st = siteStatus(s), ms = machines.filter(m => m.site === s.id);
+    const n = k => ms.filter(m => m.status === k).length;
+    const tr = el("tr", selected === s.id ? "sel" : "");
+    tr.tabIndex = 0;
+    const c0 = el("td"), nm = el("div", "snm");
+    nm.appendChild(el("span", "dot " + st));
+    nm.appendChild(el("span", "tag", TAG[s.sparte]));
+    nm.appendChild(el("span", "", s.name));
+    c0.appendChild(nm);
+    c0.appendChild(el("div", "sst", ms.length ? LABEL[st] : "Keine Maschinen"));
+    tr.appendChild(c0);
+    [n("running"), n("waiting"), n("broken"), (!LIVE || needsOk) ? openNeeds(s.id).length : "–"].forEach(v=>{
+      tr.appendChild(el("td", v === 0 ? "zero" : "", String(v)));
+    });
+    tr.onclick = ()=>selectSite(s.id);
+    tr.onkeydown = e=>{ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); selectSite(s.id); } };
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  box.appendChild(t);
+  if(list.length > 100) box.appendChild(el("div", "empty", "… und " + (list.length - 100) + " weitere. Nutze die Suche rechts."));
+}
+
 function render(){
   // Karte
   if(lmap){
@@ -1126,6 +1189,7 @@ function render(){
 
   renderNeedsAll();
   renderList();
+  renderSiteTable();
   renderDetail();
   update3D();
 }

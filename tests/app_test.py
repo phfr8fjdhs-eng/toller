@@ -61,10 +61,19 @@ with sync_playwright() as p:
     d.fill("#siteSearch", "kanal")
     check("Demo: Suche findet 1", d.locator("#siteList .item").count() == 1)
     d.fill("#siteSearch", "")
+    # Tabelle unter der Karte
+    check("Tabelle: unter der Karte sichtbar mit 5 Baustellen", d.locator("#siteTableBox").is_visible() and d.locator("#siteTable tbody tr").count() == 5, str(d.locator("#siteTable tbody tr").count()))
+    kz = d.evaluate("(() => { const s = sites.find(x => x.name === 'Kanal Bahnhofstr.'); const ms = machines.filter(m => m.site === s.id); return [ms.filter(m => m.status === 'running').length, ms.filter(m => m.status === 'waiting').length, ms.filter(m => m.status === 'broken').length, openNeeds(s.id).length].map(String); })()")
+    zeile = d.locator("#siteTable tbody tr", has_text="Kanal Bahnhofstr.")
+    check("Tabelle: Zahlen der Zeile stimmen mit den Maschinen und dem Bedarf", zeile.locator("td").all_inner_texts()[1:] == kz, str(zeile.locator("td").all_inner_texts()))
+    check("Tabelle: Status steht als Text (nicht nur Farbe)", any(t in zeile.locator(".sst").inner_text() for t in ("Läuft", "Wartet", "Defekt")))
+    zeile.click()
+    check("Tabelle: Tipp auf Zeile waehlt die Baustelle", d.evaluate("findSite(selected).name") == "Kanal Bahnhofstr." and d.locator("#siteTable tbody tr.sel", has_text="Kanal Bahnhofstr.").count() == 1)
     # Sparten-Filter: Mehrfachauswahl
     d.click('#filters [data-f="garten"]'); d.click('#filters [data-f="strasse"]')
     check("Filter: Garten und Strasse zusammen gewaehlt", d.locator("#siteList .item").count() == 4 and d.locator('#filters [data-f="garten"].active').count() == 1 and d.locator('#filters [data-f="strasse"].active').count() == 1 and d.locator('#filters [data-f="all"].active').count() == 0)
     check("Filter: Tiefbau-Baustelle ist ausgeblendet", d.locator("#siteList .item", has_text="Kanal Bahnhofstr.").count() == 0 and d.locator("#lmap .lm .site.dim").count() == 1)
+    check("Filter: Tabelle zeigt nur Garten und Strasse", d.locator("#siteTable tbody tr").count() == 4 and d.locator("#siteTable tbody tr", has_text="Kanal Bahnhofstr.").count() == 0)
     d.click('#filters [data-f="garten"]')
     check("Filter: Garten wieder abwaehlen", d.locator("#siteList .item").count() == 2)
     d.click('#filters [data-f="garten"]'); d.click('#filters [data-f="tief"]')
@@ -189,6 +198,7 @@ with sync_playwright() as p:
     d.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_demo.png"), full_page=False)
     # Die Vorfuehrung meldet selbst: Absender ist "Simulation", nie eine echte Person, und es ist ein Material aus dem Katalog
     sim = new_page(b, False); sim.goto(URL + "?modus=leicht"); sim.wait_for_timeout(500)
+    check("Leicht: keine Tabelle (Baustellen stehen schon als Karten da)", sim.locator("#siteTableBox").is_hidden() and sim.locator("#siteTable tr").count() == 0)
     sim.evaluate("Math.random = () => 0.004; tick(); Math.random = () => 0.5;")
     ws = sim.evaluate("machines.filter(m => m.status === 'waiting')")
     check("Demo: die Simulation meldet Material mit Katalog-Namen und Absender 'Simulation'", len(ws) >= 5 and all(m["by"] == "Simulation" and m["reason"].startswith("Material fehlt: ") and len(m["reason"]) > 17 for m in ws), str(ws[:1]))
