@@ -149,8 +149,9 @@
   #lmap.compact .site.sel .info{display:block}
   #lmap.compact .site.sel .dots{display:none}
   /* Ganz weit herausgezoomt: nur ein kleines Feld in der Statusfarbe, damit man den Ueberblick behaelt */
-  #lmap.mini .site:not(.sel){width:16px;height:16px;max-width:none;padding:0;border-radius:4px;border-width:2px}
+  #lmap.mini .site:not(.sel){position:relative;width:14px;height:14px;max-width:none;padding:0;border-radius:4px;border-width:2px}
   #lmap.mini .site:not(.sel) .top,#lmap.mini .site:not(.sel) .dots,#lmap.mini .site:not(.sel) .info,#lmap.mini .site:not(.sel) .scene{display:none}
+  #lmap.mini .site:not(.sel)::after{content:"";position:absolute;inset:-12px}   /* grosse Tippfläche trotz kleinem Feld */
   #lmap.mini .site.running:not(.sel){background:var(--ok)}
   #lmap.mini .site.waiting:not(.sel){background:var(--wait)}
   #lmap.mini .site.broken:not(.sel){background:var(--bad)}
@@ -1554,8 +1555,8 @@ function fallbackToSketch(){
 function updateCompact(){
   if(!lmap) return;
   const z = lmap.getZoom();
-  $("lmap").classList.toggle("compact", z < 12.3);   // weit weg: nur Name und Punkte
-  $("lmap").classList.toggle("mini", z < 10.6);      // ganz weit weg: nur ein Feld in der Statusfarbe
+  $("lmap").classList.toggle("compact", z < 13.5);   // weiter weg: nur Name und Punkte
+  $("lmap").classList.toggle("mini", z < 12.5);      // weit weg: nur ein Feld in der Statusfarbe
 }
 
 async function initRealMap(){
