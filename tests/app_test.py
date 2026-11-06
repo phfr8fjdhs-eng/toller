@@ -886,13 +886,17 @@ with sync_playwright() as p:
     z.evaluate("drawings.push({ id:'x1', site:'s3', kind:'hecke', geom:{ type:'LineString', coordinates:[[8.82,47.22],[8.821,47.221]] }, label:'<img src=x onerror=window.__xss3=1>', by:'<b>Hack</b>', createdBy:'x', at:'2026-01-01' }); render();"); z.wait_for_timeout(100)
     check("Zeichnen: Bezeichnung und Name nur als Text", z.evaluate("window.__xss3") is None and "<img src=x" in z.inner_text("#detail") and "<b>Hack</b>" in z.inner_text("#detail"))
     # ---- Karte hell / dunkel
-    check("Karte: startet hell wie Google Maps (Strassen weiss, Grund hell)", ["background", "background-color", "#eceef1"] in z.evaluate("__paints") and ["highway_minor", "line-color", "#ffffff"] in z.evaluate("__paints") and z.inner_text("#themeBtn") == "Karte: Hell")
+    check("Karte: startet hell wie Google Maps (Strassen weiss, Grund hell)", ["background", "background-color", "#eceef1"] in z.evaluate("__paints") and ["highway_minor", "line-color", "#ffffff"] in z.evaluate("__paints") and z.input_value("#themeSel") == "hell")
     fits = z.evaluate("window.__fits || 0")
-    z.click("#themeBtn"); z.wait_for_timeout(500)
-    check("Karte: Schalter auf dunkel, Strassen deutlich heller als der Grund, Wahl gemerkt", ["background", "background-color", "#121a22"] in z.evaluate("__paints") and ["highway_minor", "line-color", "#5d6b7c"] in z.evaluate("__paints") and z.evaluate("localStorage.getItem('karte')") == "dunkel" and z.inner_text("#themeBtn") == "Karte: Dunkel")
+    z.select_option("#themeSel", "dunkel"); z.wait_for_timeout(500)
+    check("Karte: Schalter auf dunkel, Strassen deutlich heller als der Grund, Wahl gemerkt", ["background", "background-color", "#121a22"] in z.evaluate("__paints") and ["highway_minor", "line-color", "#5d6b7c"] in z.evaluate("__paints") and z.evaluate("localStorage.getItem('karte')") == "dunkel" and z.input_value("#themeSel") == "dunkel")
     check("Karte: nach dem Wechsel sind Baustellen, Maschinen und Zeichnungen wieder da, Ausschnitt bleibt", all(k in z.evaluate("Object.keys(__mapLayers)") for k in ["site-fill", "mach-3d", "dr-ern-full"]) and z.evaluate("window.__fits || 0") == fits and z.evaluate("mapReady") is True)
-    z.click("#themeBtn"); z.wait_for_timeout(500)
-    check("Karte: zurueck auf hell", z.evaluate("localStorage.getItem('karte')") == "hell" and z.inner_text("#themeBtn") == "Karte: Hell")
+    z.select_option("#themeSel", "luftbild"); z.wait_for_timeout(500)
+    lb = z.evaluate("__mapLayers")
+    check("Karte: Luftbild von swisstopo mit Quellenangabe, unter den Namen, ohne Relief und 3D-Haeuser", "luftbild" in lb and lb["luftbild"]["type"] == "raster" and "swissimage" in z.evaluate("__mapSrc.luftbild.tiles[0]") and "swisstopo" in z.evaluate("__mapSrc.luftbild.attribution") and "relief" not in lb and "bauten" not in lb and z.evaluate("localStorage.getItem('karte')") == "luftbild")
+    check("Karte: auf dem Luftbild sind Baustellen, Maschinen und Zeichnungen da", all(k in lb for k in ["site-fill", "mach-3d", "mach-icon", "dr-ern-full", "dr-leitung"]))
+    z.select_option("#themeSel", "hell"); z.wait_for_timeout(500)
+    check("Karte: zurueck auf hell", z.evaluate("localStorage.getItem('karte')") == "hell" and z.input_value("#themeSel") == "hell" and "luftbild" not in z.evaluate("Object.keys(__mapLayers)") and "relief" in z.evaluate("Object.keys(__mapLayers)"))
 
     # ---- Maschinen als 3D-Modelle
     m3 = z.evaluate("__mapData.machines3d.features.map(f => Object.assign({ type:f.geometry.type, n:(f.geometry.coordinates[0] || []).length }, f.properties))")

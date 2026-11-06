@@ -44,7 +44,8 @@
       this.addControl = function(){};
       this.on = function(ev, a, b){ const cb = typeof a === "function" ? a : b; (handlers[ev] = handlers[ev] || []).push(cb); if(ev === "load") setTimeout(cb, 150); };
       const data = window.__mapData = {}, layers = window.__mapLayers = {};
-      this.addSource = function(id, o){ data[id] = o.data; };
+      const srcs = window.__mapSrc = {};
+      this.addSource = function(id, o){ data[id] = o.data; srcs[id] = o; };
       this.getSource = function(id){ return id in data ? { setData:function(d){ data[id] = d; } } : undefined; };
       this.getStyle = function(){ return { layers:[{ id:"l", type:"symbol", layout:{ "text-font":["Noto Sans Regular"] } }, { id:"background", type:"background" },
         { id:"highway_minor", type:"line" }, { id:"highway_major_casing", type:"line" }, { id:"highway_name_other", type:"symbol", layout:{ "text-field":"{name}" } }],

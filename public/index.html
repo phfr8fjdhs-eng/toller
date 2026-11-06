@@ -140,8 +140,9 @@
   #map.real > svg,#map.real #sites{display:none}
   #map.picking #lmap{cursor:crosshair}
   .maplibregl-ctrl-attrib{font-size:10px}
-  .mapbtns{position:absolute;left:10px;top:10px;z-index:5;display:none;gap:6px}
+  .mapbtns{position:absolute;left:10px;top:10px;z-index:5;display:none;gap:6px;flex-wrap:wrap;max-width:calc(100% - 70px)}
   #map.real .mapbtns{display:flex}
+  #themeSel{min-height:36px;border-radius:8px;background:var(--panel);color:var(--text);border:1px solid var(--line);padding:0 8px}
 
   .overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto}
   .overlay.solid{background:var(--bg)}
@@ -281,7 +282,11 @@
       <div class="mapbtns">
         <button id="btn3d" class="active">Gelände 3D</button>
         <button id="btnOverview">Übersicht</button>
-        <button id="themeBtn">Karte: Hell</button>
+        <select id="themeSel" aria-label="Kartenart">
+          <option value="hell">Karte: Hell</option>
+          <option value="dunkel">Karte: Dunkel</option>
+          <option value="luftbild">Karte: Luftbild</option>
+        </select>
       </div>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <path d="M0 42 C 25 36, 45 58, 100 34" fill="none" stroke="#243140" stroke-width="3" vector-effect="non-scaling-stroke"/>
@@ -1835,8 +1840,22 @@ let blinkTimer = null, blinkOn = true;
 
 /* Karte hell (Standard, wie Google Maps) oder dunkel. Die Wahl wird im Gerät gemerkt.
    Die dunkle Karte wird beim Laden umgefärbt, nie per CSS-Filter (sonst stimmen die Statusfarben nicht). */
-let mapTheme = (()=>{ try{ return localStorage.getItem("karte") === "dunkel" ? "dunkel" : "hell"; }catch(e){ return "hell"; } })();
-function styleBasemap(){ if(mapTheme === "dunkel") darkenBasemap(); else lightenBasemap(); }
+let mapTheme = (()=>{ try{ const v = localStorage.getItem("karte"); return v === "dunkel" || v === "luftbild" ? v : "hell"; }catch(e){ return "hell"; } })();
+function styleBasemap(){ if(mapTheme === "dunkel") darkenBasemap(); else if(mapTheme === "luftbild") photoBasemap(); else lightenBasemap(); }
+/* Luftbild: SWISSIMAGE von swisstopo (etwa 10 cm genau, frei nutzbar ohne Schlüssel, Quelle muss genannt werden).
+   Darauf sieht man die echten Fahrbahnen mit Markierungen und Abbiegepfeilen. Stand der Aufnahme: einige Jahre alt möglich. */
+const PHOTO_TILES = "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg";
+function photoBasemap(){
+  const layers = (lmap.getStyle() || {}).layers || [];
+  const first = layers.find(l => l.type === "symbol");
+  lmap.addSource("luftbild", { type:"raster", tiles:[PHOTO_TILES], tileSize:256, maxzoom:19, attribution:"Luftbild © swisstopo (SWISSIMAGE)" });
+  lmap.addLayer({ id:"luftbild", type:"raster", source:"luftbild" }, first ? first.id : undefined);
+  layers.forEach(l=>{                                              // Namen auf dem Foto: weiss mit dunklem Rand, gut lesbar
+    if(l.type === "symbol" && l.layout && l.layout["text-field"]){
+      try{ lmap.setPaintProperty(l.id, "text-color", "#ffffff"); lmap.setPaintProperty(l.id, "text-halo-color", "#0f1419"); }catch(e){}
+    }
+  });
+}
 // Helle Karte: Strassen weiss mit deutlichem Rand, Strassennamen dunkel, damit man sie gut findet
 function lightenBasemap(){
   ((lmap.getStyle() || {}).layers || []).forEach(l=>{
@@ -1884,7 +1903,7 @@ function rebuildMap(){
 function setMapTheme(t){
   mapTheme = t;
   try{ localStorage.setItem("karte", t); }catch(e){}
-  const b = $("themeBtn"); if(b) b.textContent = t === "dunkel" ? "Karte: Dunkel" : "Karte: Hell";
+  const sel = $("themeSel"); if(sel) sel.value = t;
   rebuildMap();
 }
 
@@ -2122,7 +2141,7 @@ function addMapLayers(){
   const sym = (style.layers || []).find(l => l.type === "symbol" && l.layout && l.layout["text-font"]);
   const font = sym ? sym.layout["text-font"] : ["Noto Sans Regular"];
   // 3D-Häuser aus den Kartendaten (OpenStreetMap-Höhen), erst ab Strassen-Zoom, damit es flüssig bleibt
-  if(vec){
+  if(vec && mapTheme !== "luftbild"){
     lmap.addLayer({ id:"bauten", type:"fill-extrusion", source:vec, "source-layer":"building", minzoom:14,
       filter:["!=", ["get", "hide_3d"], true],
       paint:{
@@ -2267,7 +2286,7 @@ async function initRealMap(cam){
       lmap.addSource("dem", { type:"raster-dem", tiles:[DEM_TILES], encoding:"terrarium", tileSize:256, maxzoom:15,
         attribution:"Höhendaten: Mapzen, AWS Terrain Tiles" });
       const first = lmap.getStyle().layers.find(l => l.type === "symbol");
-      lmap.addLayer({ id:"relief", type:"hillshade", source:"dem",
+      if(mapTheme !== "luftbild") lmap.addLayer({ id:"relief", type:"hillshade", source:"dem",
         paint:mapTheme === "dunkel" ? { "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#05080b", "hillshade-highlight-color":"#2a3542" }
                                      : { "hillshade-exaggeration":0.35, "hillshade-shadow-color":"#6b7380", "hillshade-highlight-color":"#ffffff" } }, first ? first.id : undefined);
       styleBasemap();
@@ -3583,8 +3602,8 @@ $("filters").onclick = e=>{
 renderFilters();
 $("siteSearch").addEventListener("input", renderList);
 $("btn3d").onclick = ()=>set3D(!is3D);
-$("themeBtn").textContent = mapTheme === "dunkel" ? "Karte: Dunkel" : "Karte: Hell";
-$("themeBtn").onclick = ()=>setMapTheme(mapTheme === "dunkel" ? "hell" : "dunkel");
+$("themeSel").value = mapTheme;
+$("themeSel").onchange = e => setMapTheme(e.target.value);
 function initMode(){
   $("modeBtn").onclick = ()=>{
     const next = MODE === "leicht" ? "3d" : "leicht";
