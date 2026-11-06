@@ -139,7 +139,10 @@
   #map.real #lmap{display:block}
   #map.real > svg,#map.real #sites{display:none}
   #map.picking #lmap{cursor:crosshair}
-  .maplibregl-ctrl-attrib{font-size:10px}
+  /* Quellenangabe klein, aber lesbar (Pflicht für OpenStreetMap, OpenFreeMap und swisstopo). Klappt nach dem ersten Verschieben zu einem "i" zusammen. */
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib{font-size:8.5px;line-height:1.25;margin:0 2px 2px 0;opacity:.85}
+  .maplibregl-ctrl-attrib.maplibregl-compact{min-height:18px;padding:1px 22px 1px 6px}
+  .maplibregl-ctrl-attrib.maplibregl-compact .maplibregl-ctrl-attrib-button{width:18px;height:18px;background-size:14px}
   .mapbtns{position:absolute;left:10px;top:10px;z-index:5;display:none;gap:6px;flex-wrap:wrap;max-width:calc(100% - 70px)}
   #map.real .mapbtns{display:flex}
   #themeSel{min-height:36px;border-radius:8px;background:var(--panel);color:var(--text);border:1px solid var(--line);padding:0 8px}
@@ -1848,7 +1851,7 @@ const PHOTO_TILES = "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/def
 function photoBasemap(){
   const layers = (lmap.getStyle() || {}).layers || [];
   const first = layers.find(l => l.type === "symbol");
-  lmap.addSource("luftbild", { type:"raster", tiles:[PHOTO_TILES], tileSize:256, maxzoom:19, attribution:"Luftbild © swisstopo (SWISSIMAGE)" });
+  lmap.addSource("luftbild", { type:"raster", tiles:[PHOTO_TILES], tileSize:256, maxzoom:19, attribution:"© swisstopo" });
   lmap.addLayer({ id:"luftbild", type:"raster", source:"luftbild" }, first ? first.id : undefined);
   layers.forEach(l=>{                                              // Namen auf dem Foto: weiss mit dunklem Rand, gut lesbar
     if(l.type === "symbol" && l.layout && l.layout["text-field"]){
@@ -2284,7 +2287,7 @@ async function initRealMap(cam){
     lmap.on("load", ()=>{
       if(!lmap) return;
       lmap.addSource("dem", { type:"raster-dem", tiles:[DEM_TILES], encoding:"terrarium", tileSize:256, maxzoom:15,
-        attribution:"Höhendaten: Mapzen, AWS Terrain Tiles" });
+        attribution:"Höhen © Mapzen" });
       const first = lmap.getStyle().layers.find(l => l.type === "symbol");
       if(mapTheme !== "luftbild") lmap.addLayer({ id:"relief", type:"hillshade", source:"dem",
         paint:mapTheme === "dunkel" ? { "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#05080b", "hillshade-highlight-color":"#2a3542" }
