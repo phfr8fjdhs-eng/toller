@@ -12,7 +12,7 @@ Im Live-Modus legen Mitarbeiter Maschinen selbst in der Seite an (Knopf "+ Masch
 **Neue Maschinenart (Vorschlagsliste):**
 1. Öffne `public/index.html` und suche `TYPEN`.
 2. Füge die Art als Text hinzu, zum Beispiel `"Kehrmaschine"`.
-3. Damit die Maschine in der Szene und in 3D nicht nur als allgemeine Maschine erscheint: in `machKind` die Art erkennen, in `machShape` die Silhouette (SVG) ergänzen und in `MODELS3` das 3D-Modell, dazu `FOOT` und `TOPH` (Grösse für Ring und Schild) und bei Bedarf `MACH_SCALE`. Ohne diese Schritte wird die allgemeine Form `allg` gezeichnet.
+3. Damit die Maschine in der Szene und in 3D nicht nur als allgemeine Maschine erscheint: in `machKind` die Art erkennen, in `machShape` die Silhouette (SVG) ergänzen und in `MODELS3` das 3D-Modell der 3D-Ansicht, dazu `FOOT` und `TOPH` (Grösse für Ring und Schild) und bei Bedarf `MACH_SCALE`. Für die Karte: die Art in `MACH_KINDS` eintragen (sonst fehlt das Bild) und in `MACH3D` das Modell aus Blöcken in Metern (neutrale Farben aus `M3`, nie Statusfarben; der Abstand der Schrift ergibt sich daraus über `machLift`). Ohne diese Schritte wird die allgemeine Form `allg` gezeichnet.
 
 **Neues Material in der Auswahl bei "Material fehlt":** `public/materialien.js`, in die passende Kategorie als Text eintragen (jeder Name nur einmal, höchstens 60 Zeichen). Mitarbeiter können eigene Einträge in der Seite ergänzen, dafür ist kein Code nötig.
 
