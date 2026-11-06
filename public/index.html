@@ -235,12 +235,17 @@
 
   @media(max-width:600px){
     header{gap:10px}
-    .hudbar{width:110px}
+    .hud{flex-wrap:wrap;width:100%;row-gap:6px;column-gap:14px}
+    .hud > span{white-space:nowrap}
+    .hudbar{order:3;flex:1 1 100%;width:auto}   /* Balken eigene Zeile über die ganze Breite, Text bleibt ganz */
     #map{aspect-ratio:auto;min-height:0;padding:10px}
     #map > svg{display:none}
-    #sites{position:static;display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    .site{position:static;transform:none;width:auto}
+    #sites{position:static;display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:10px}   /* minmax(0,…): Karten dürfen schmaler werden, nichts ragt rechts hinaus */
+    .site{position:static;transform:none;width:auto;min-width:0}
+    .site .top{align-items:flex-start}
+    .site .nm{white-space:normal;min-width:0;overflow-wrap:break-word;word-wrap:break-word;line-height:1.25}   /* ganzer Name, notfalls zweizeilig */
     .mrow button,.avail button{padding:9px 12px}
+    .mrow .acts{width:100%;justify-content:flex-start;padding-left:16px}   /* Knöpfe unter dem Namen, nicht rechts verstreut */
     .row2{grid-template-columns:1fr}
   }
   @media(prefers-reduced-motion:reduce){.site.broken,#banner.show,.scene .mach.broken{animation:none}}
