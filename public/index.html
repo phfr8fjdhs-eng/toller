@@ -1764,6 +1764,10 @@ function ground3(p, site, kinds, zFront){
   } else {
     flat(p, 64, zMax - zMin, base, 0, 0, (zMax + zMin) / 2).receiveShadow = true;
   }
+  // Umgebung (dunkel) als vier Flächen rund um den Boden: kein Deckel über dem Graben
+  const zc = (zMax + zMin) / 2, SU = 0x1a2129;
+  [[98, 260, -81, zc], [98, 260, 81, zc], [64, zMin - zc + 130, 0, (zc - 130 + zMin) / 2], [64, zc + 130 - zMax, 0, (zMax + zc + 130) / 2]]
+    .forEach(([w, d, x, z]) => { flat(p, w, d, SU, x, -0.02, z).receiveShadow = true; });
   if(kind === "strasse"){
     flat(p, 64, 9, 0x2c3036, 0, 0.02, -7.5).receiveShadow = true;
     bx(p, 64, 0.06, 0.3, 0xaeb5bd, 0, 0.05, -12); bx(p, 64, 0.06, 0.3, 0xaeb5bd, 0, 0.05, -3);
@@ -1894,13 +1898,11 @@ async function open3D(id){
   Object.assign(sun.shadow.camera, { left:-38, right:38, top:38, bottom:-38, near:5, far:120 });
   scene.add(sun);
   const fill = new THREE.DirectionalLight(0xbfd2ff, 0.25); fill.position.set(25, 18, -20); scene.add(fill);
-  const surround = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), new THREE.MeshStandardMaterial({ color:0x1a2129, roughness:1, metalness:0 }));
-  surround.rotation.set(-Math.PI / 2, 0, 0); surround.position.set(0, -0.02, 0); surround.receiveShadow = true; scene.add(surround);
   const camera = new THREE.PerspectiveCamera(42, 1.6, 0.5, 400);
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.maxPolarAngle = Math.PI / 2 - 0.05; controls.minDistance = 6; controls.maxDistance = 90;
 
-  const v = v3 = { siteId:id, renderer, scene, camera, controls, canvas:renderer.domElement, geos:{}, mats:{}, own:[], keep:[surround.geometry, surround.material], content:new THREE.Group(),
+  const v = v3 = { siteId:id, renderer, scene, camera, controls, canvas:renderer.domElement, geos:{}, mats:{}, own:[], keep:[], content:new THREE.Group(),
     blinkers:[], sig:"", dirty:true, raf:0, lastOn:true,
     still: !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) };
   scene.add(v.content);
