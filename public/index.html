@@ -148,6 +148,40 @@
   .overlay.modalov{background:rgba(5,8,12,.72);align-items:flex-start}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:100%;max-width:440px;margin:auto}
   .card.wide{max-width:640px}
+  .card.xwide{max-width:1100px}
+  .tabs{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .tabs button{min-height:40px}
+  .tbltools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .tbltools input{flex:1 1 220px;min-width:0}
+  .tblsort{display:none}
+  .tblnote{font-size:12px;margin:0 0 8px}
+  .tblwrap{max-height:65vh;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th{position:sticky;top:0;z-index:1;background:var(--panel);text-align:left;padding:0;border-bottom:1px solid var(--line);white-space:nowrap}
+  .tbl th button{background:none;border:0;border-radius:0;width:100%;text-align:left;padding:9px 10px;font-weight:600;color:var(--muted)}
+  .tbl th button.on{color:var(--text)}
+  .tbl td{padding:8px 10px;border-top:1px solid var(--line);vertical-align:top}
+  .tbl tbody tr{cursor:pointer}
+  .tbl tbody tr:hover{background:#202a35}
+  .tbl tr.broken{box-shadow:inset 3px 0 var(--bad)}
+  .tbl tr.waiting{box-shadow:inset 3px 0 var(--wait)}
+  .tbl .st{display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .tbl .sm{color:var(--muted);font-size:12px;margin-top:2px}
+  .tbl .ml{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:4px}
+  .tbl .ml span{display:inline-flex;align-items:center;gap:4px}
+  .dot.broken.blinkdot{animation:dotblink .8s infinite}
+  @keyframes dotblink{50%{opacity:.25}}
+  @media(max-width:700px){
+    .tblsort{display:block}
+    .tblwrap{max-height:none;border:0;overflow:visible}
+    .tbl thead{display:none}
+    .tbl,.tbl tbody,.tbl tr,.tbl td{display:block;width:auto}
+    .tbl tr{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px}
+    .tbl td{border:0;padding:3px 0;display:flex;gap:10px;min-width:0}
+    .tbl td>*{min-width:0}
+    .tbl td::before{content:attr(data-label);color:var(--muted);flex:0 0 92px;font-size:12px;padding-top:1px}
+    .tbl td.nil{display:none}
+  }
   .cardhead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
   .cardhead h2{margin:0;font-size:17px}
   .form{display:flex;flex-direction:column;gap:12px}
@@ -205,6 +239,7 @@
   <div class="btns">
     <button id="addSiteBtn" class="primary">+ Baustelle</button>
     <button id="addMachineBtn">+ Maschine</button>
+    <button id="tablesBtn" title="Alle Baustellen und alle Maschinen als Tabelle">Tabellen</button>
     <button id="historyBtn" title="Verlauf der Störungen und Wartezeiten">Verlauf</button>
     <button id="modeBtn" title="Leicht: ohne Karte und 3D, spart Arbeitsspeicher und Daten (für ältere Handys). 3D: Karte und 3D-Ansicht der Baustelle (für Computer)."></button>
     <button id="usersBtn" hidden>Benutzer</button>
@@ -1184,6 +1219,7 @@ function render(){
   renderList();
   renderDetail();
   update3D();
+  if(tablesRefresh){ if($("tblWrap")) tablesRefresh(); else tablesRefresh = null; }   // offene Tabellen live nachführen
 }
 
 // Automatisches Neuzeichnen wartet, solange ein Finger oder die Maus gedrückt ist.
@@ -2079,6 +2115,164 @@ function drawHistory(box, rows, capped){
   box.appendChild(note);
 }
 
+/* =============================================================== Tabellen: alle Baustellen und alle Maschinen
+   Wird erst beim Öffnen gebaut und beim Schliessen entfernt. Läuft live mit (render ruft tablesRefresh).
+   Status immer als Punkt UND Text, Sparte nur als Buchstabe. Der Sparten-Filter oben gilt auch hier. */
+let tablesRefresh = null;
+const TBL_MAX = 500;
+const SITE_ST_TEXT = { broken:"Defekt", waiting:"Wartet", running:"Läuft", off:"Keine Maschine aktiv" };
+const stCell = (status, text)=>{ const c = el("div", "st"); c.appendChild(el("span", "dot " + status + (status === "broken" ? " blinkdot" : ""))); c.appendChild(el("span", "", text)); return c; };
+const whenText = iso => { if(!iso) return ""; const d = new Date(iso); if(isNaN(d)) return "";
+  return new Date().toDateString() === d.toDateString() ? d.toLocaleTimeString("de-CH", { hour:"2-digit", minute:"2-digit" }) : needTime(iso); };
+const byName = (a, b) => a.name.localeCompare(b.name, "de");
+
+function tableSites(){
+  return sites.filter(showSite).map(s=>{
+    const ms = machines.filter(m => m.site === s.id).sort((a, b) => RANK[a.status] - RANK[b.status] || byName(a, b));
+    const nd = openNeeds(s.id);
+    const c = { running:0, waiting:0, broken:0, off:0 }; ms.forEach(m => c[m.status]++);
+    return { id:s.id, s, status:siteStatus(s), name:s.name, sparten:spartenTag(s), ms, c, nd,
+      text:[s.name, spartenText(s)].concat(ms.map(m => m.name + " " + m.typ)).concat(nd.map(n => n.text)).join(" ").toLowerCase() };
+  });
+}
+function tableMachines(){
+  return machines.filter(m => showSparte(m.sparte)).map(m=>{
+    const site = m.site ? findSite(m.site) : null;
+    const wo = m.site ? (site ? site.name : "Baustelle gelöscht") : "Werkhof";
+    const reason = m.status === "broken" ? (m.reason ? "Defekt: " + m.reason : "Defekt") : m.status === "waiting" ? m.reason : "";
+    const by = (m.status === "broken" || m.status === "waiting") && m.by ? m.by : "";
+    return { id:m.id, m, status:m.status, name:m.name, typ:m.typ || "", sparte:m.sparte ? TAG[m.sparte] : "", wo, reason, by, at:by ? m.at : null,
+      siteId:loc(m), text:[m.name, m.typ, wo, reason, by, m.sparte ? SPARTEN[m.sparte] : ""].join(" ").toLowerCase() };
+  });
+}
+
+const TBL_COLS = {
+  sites:[
+    { k:"status", t:"Status", cmp:(a, b) => RANK[a.status] - RANK[b.status] },
+    { k:"sparten", t:"Sparten", cmp:(a, b) => a.sparten.localeCompare(b.sparten) },
+    { k:"name", t:"Baustelle", cmp:byName },
+    { k:"machines", t:"Maschinen", cmp:(a, b) => a.ms.length - b.ms.length },
+    { k:"needs", t:"Offener Bedarf", cmp:(a, b) => a.nd.length - b.nd.length }
+  ],
+  machines:[
+    { k:"status", t:"Status", cmp:(a, b) => RANK[a.status] - RANK[b.status] },
+    { k:"name", t:"Maschine", cmp:byName },
+    { k:"typ", t:"Art", cmp:(a, b) => a.typ.localeCompare(b.typ, "de") },
+    { k:"sparte", t:"Sparte", cmp:(a, b) => a.sparte.localeCompare(b.sparte) },
+    { k:"wo", t:"Wo", cmp:(a, b) => (a.wo === "Werkhof") - (b.wo === "Werkhof") || a.wo.localeCompare(b.wo, "de") },
+    { k:"reason", t:"Grund", cmp:(a, b) => (!a.reason) - (!b.reason) || a.reason.localeCompare(b.reason, "de") },
+    { k:"by", t:"Gemeldet", cmp:(a, b) => (!a.at) - (!b.at) || String(b.at || "").localeCompare(String(a.at || "")) }
+  ]
+};
+
+function tableCell(tab, k, r){
+  const td = el("td");
+  if(tab === "sites"){
+    if(k === "status") td.appendChild(stCell(r.status, SITE_ST_TEXT[r.status]));
+    else if(k === "sparten") td.appendChild(el("span", "tag", r.sparten));
+    else if(k === "name") td.appendChild(el("strong", "", r.name));
+    else if(k === "machines"){
+      const box = el("div");
+      const parts = [];
+      if(r.c.broken) parts.push(r.c.broken + " defekt");
+      if(r.c.waiting) parts.push(r.c.waiting + " wartet");
+      if(r.c.running) parts.push(r.c.running + " läuft");
+      box.appendChild(el("div", "", r.ms.length ? r.ms.length + (r.ms.length === 1 ? " Maschine" : " Maschinen") + (parts.length ? " · " + parts.join(", ") : "") : "Keine Maschinen"));
+      if(r.ms.length){
+        const ml = el("div", "ml");
+        r.ms.slice(0, 8).forEach(m=>{ const x = el("span"); x.appendChild(el("span", "dot " + m.status)); x.appendChild(el("span", "", m.name)); ml.appendChild(x); });
+        if(r.ms.length > 8) ml.appendChild(el("span", "sm", "+ " + (r.ms.length - 8) + " weitere"));
+        box.appendChild(ml);
+      }
+      td.appendChild(box);
+    }
+    else if(k === "needs"){
+      const box = el("div");
+      if(!r.nd.length) box.appendChild(el("span", "sm", "Nichts offen"));
+      r.nd.slice(0, 3).forEach(n => box.appendChild(el("div", "", n.text)));
+      if(r.nd.length > 3) box.appendChild(el("div", "sm", "+ " + (r.nd.length - 3) + " weitere"));
+      td.appendChild(box);
+    }
+  }else{
+    if(k === "status") td.appendChild(stCell(r.status, SHORT[r.status]));
+    else if(k === "name") td.appendChild(el("strong", "", r.name));
+    else if(k === "sparte") td.appendChild(el("span", "tag", r.sparte || "?"));
+    else if(k === "by"){ if(r.by){ const b = el("div"); b.appendChild(el("div", "", r.by)); if(r.at) b.appendChild(el("div", "sm", whenText(r.at))); td.appendChild(b); } else { td.appendChild(el("span", "sm", "–")); td.className = "nil"; } }
+    else { td.appendChild(el("span", r[k] ? "" : "sm", r[k] || "–")); if(!r[k]) td.className = "nil"; }
+  }
+  return td;
+}
+
+function modalTables(tab){
+  let cur = tab === "machines" ? "machines" : "sites";
+  const sortBy = { sites:{ k:"status", asc:true }, machines:{ k:"status", asc:true } };
+  const body = el("div");
+  const tabs = el("div", "tabs");
+  const tS = el("button"); tS.id = "tabSites"; tS.type = "button";
+  const tM = el("button"); tM.id = "tabMachines"; tM.type = "button";
+  tabs.appendChild(tS); tabs.appendChild(tM); body.appendChild(tabs);
+  const tools = el("div", "tbltools");
+  const q = input("search", "", "tblSearch"); q.placeholder = "Suchen: Name, Art, Baustelle, Grund";
+  q.setAttribute("aria-label", "Tabelle durchsuchen");
+  const sortSel = el("select", "tblsort"); sortSel.id = "tblSort"; sortSel.setAttribute("aria-label", "Sortieren nach");
+  tools.appendChild(q); tools.appendChild(sortSel); body.appendChild(tools);
+  const note = el("div", "muted tblnote"); note.id = "tblNote"; body.appendChild(note);
+  const wrap = el("div", "tblwrap"); wrap.id = "tblWrap"; body.appendChild(wrap);
+
+  const draw = ()=>{
+    if(!wrap.isConnected){ tablesRefresh = null; return; }
+    const allS = tableSites(), allM = tableMachines();
+    tS.textContent = "Baustellen (" + allS.length + ")"; tM.textContent = "Maschinen (" + allM.length + ")";
+    tS.classList.toggle("active", cur === "sites"); tM.classList.toggle("active", cur === "machines");
+    const cols = TBL_COLS[cur], sb2 = sortBy[cur];
+    // Sortier-Auswahl (Handy, dort gibt es keine Spaltenköpfe)
+    sortSel.innerHTML = "";
+    cols.forEach(c=>{ [true, false].forEach(asc=>{ const o = el("option", "", c.t + (asc ? " ▲" : " ▼")); o.value = c.k + ":" + (asc ? 1 : 0); sortSel.appendChild(o); }); });
+    sortSel.value = sb2.k + ":" + (sb2.asc ? 1 : 0);
+    const term = q.value.trim().toLowerCase();
+    let list = cur === "sites" ? allS : allM;
+    if(term) list = list.filter(r => r.text.indexOf(term) >= 0);
+    const col = cols.find(c => c.k === sb2.k) || cols[0];
+    list = list.slice().sort((a, b) => (sb2.asc ? 1 : -1) * (col.cmp(a, b) || 0) || RANK[a.status] - RANK[b.status] || byName(a, b));
+    const fl = filter.size ? "Sparten-Filter: " + [...filter].map(k => SPARTEN[k]).join(", ") + ". " : "";
+    note.textContent = fl + (list.length > TBL_MAX ? TBL_MAX + " von " + list.length + " gezeigt, bitte die Suche nutzen." : list.length + (list.length === 1 ? " Eintrag" : " Einträge") + (term ? " gefunden" : "") + ". Zeile antippen öffnet die Baustelle.");
+    const sx = wrap.scrollLeft, sy = wrap.scrollTop;
+    wrap.innerHTML = "";
+    if(!list.length){ wrap.appendChild(el("div", "empty", term ? "Nichts gefunden." : (cur === "sites" ? "Keine Baustellen." : "Keine Maschinen."))); return; }
+    const table = el("table", "tbl"); table.id = cur === "sites" ? "tblSites" : "tblMachines";
+    const thead = el("thead"), hr = el("tr");
+    cols.forEach(c=>{
+      const th = el("th"); th.setAttribute("aria-sort", sb2.k === c.k ? (sb2.asc ? "ascending" : "descending") : "none");
+      const b = el("button", sb2.k === c.k ? "on" : "", c.t + (sb2.k === c.k ? (sb2.asc ? " ▲" : " ▼") : "")); b.type = "button";
+      b.onclick = ()=>{ if(sb2.k === c.k) sb2.asc = !sb2.asc; else { sb2.k = c.k; sb2.asc = true; } draw(); };
+      th.appendChild(b); hr.appendChild(th);
+    });
+    thead.appendChild(hr); table.appendChild(thead);
+    const tb = el("tbody");
+    list.slice(0, TBL_MAX).forEach(r=>{
+      const tr = el("tr", r.status);
+      cols.forEach(c=>{ const td = tableCell(cur, c.k, r); td.setAttribute("data-label", c.t); tr.appendChild(td); });
+      tr.onclick = ()=>{
+        const target = cur === "sites" ? r.id : r.siteId;
+        closeModal(); tablesRefresh = null;
+        selectSite(target);
+        const d = $("detail"); if(d && d.scrollIntoView) d.scrollIntoView({ behavior:"smooth", block:"start" });
+      };
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb); wrap.appendChild(table);
+    wrap.scrollLeft = sx; wrap.scrollTop = sy;
+  };
+  tS.onclick = ()=>{ cur = "sites"; draw(); };
+  tM.onclick = ()=>{ cur = "machines"; draw(); };
+  q.addEventListener("input", draw);
+  sortSel.addEventListener("change", ()=>{ const [k, a] = sortSel.value.split(":"); sortBy[cur] = { k, asc:a === "1" }; draw(); });
+  openModal("Tabellen", body);
+  const card = $("modal").querySelector(".card"); if(card) card.classList.add("xwide");
+  tablesRefresh = draw;
+  draw();
+}
+
 function modalHistory(){
   const body = el("div");
   const range = select([["30", "Letzte 30 Tage"], ["90", "Letzte 90 Tage"], ["365", "Letztes Jahr"]], "30", "h-range");
@@ -2638,6 +2832,7 @@ $("btnOverview").onclick = ()=>showOverview();
 $("addSiteBtn").onclick = ()=>modalSite();
 $("addMachineBtn").onclick = ()=>modalMachine();
 $("historyBtn").onclick = modalHistory;
+$("tablesBtn").onclick = ()=>modalTables("sites");
 $("pickCancel").onclick = ()=>{ pickCb = null; $("pickBar").hidden = true; $("map").classList.remove("picking"); modalSite(pickDraft || undefined); };
 
 // Solange ein Finger oder die Maus gedrückt ist, wird nicht automatisch neu gezeichnet.
