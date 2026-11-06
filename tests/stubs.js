@@ -40,14 +40,22 @@
   window.__mapHandlers = handlers;
   window.maplibregl = {
     Map: function(){
+      Object.keys(handlers).forEach(k => { delete handlers[k]; });     // wie bei MapLibre: alte Karte entfernt, ihre Ereignisse sind weg
       this.addControl = function(){};
       this.on = function(ev, a, b){ const cb = typeof a === "function" ? a : b; (handlers[ev] = handlers[ev] || []).push(cb); if(ev === "load") setTimeout(cb, 150); };
       const data = window.__mapData = {}, layers = window.__mapLayers = {};
       this.addSource = function(id, o){ data[id] = o.data; };
       this.getSource = function(id){ return id in data ? { setData:function(d){ data[id] = d; } } : undefined; };
-      this.getStyle = function(){ return { layers:[{ id:"l", type:"symbol", layout:{ "text-font":["Noto Sans Regular"] } }], sources:{ openmaptiles:{ type:"vector" } } }; };
+      this.getStyle = function(){ return { layers:[{ id:"l", type:"symbol", layout:{ "text-font":["Noto Sans Regular"] } }, { id:"background", type:"background" },
+        { id:"highway_minor", type:"line" }, { id:"highway_major_casing", type:"line" }, { id:"highway_name_other", type:"symbol", layout:{ "text-field":"{name}" } }],
+        sources:{ openmaptiles:{ type:"vector" } } }; };
+      const paints = window.__paints = [];
       this.addLayer = function(l){ layers[l.id] = l; }; this.getLayer = function(id){ return layers[id]; };
-      this.setPaintProperty = function(id, k, v){ if(layers[id]) layers[id].paint[k] = v; };
+      this.setPaintProperty = function(id, k, v){ if(layers[id]) layers[id].paint[k] = v; else paints.push([id, k, v]); };
+      // Strassennetz der Kartendaten (fuer "Strasse erneuern"), im Test gesetzt
+      this.querySourceFeatures = function(src, o){ return o && o.sourceLayer === "transportation" ? (window.__mapRoads || []) : []; };
+      this.getCenter = function(){ return { lng:8.85, lat:47.235 }; };
+      this.getPitch = function(){ return 55; }; this.getBearing = function(){ return -15; };
       this.queryRenderedFeatures = function(){ return window.__mapHit || []; };
       this.getCanvas = function(){ return document.createElement("canvas"); };
       const images = window.__mapImages = {};
@@ -59,6 +67,15 @@
       this.remove = function(){};
     },
     NavigationControl: function(){},
+    Popup: function(o){
+      const self = this; let node = null;
+      this.setLngLat = function(p){ self.pos = p; return self; };
+      this.setDOMContent = function(n){ node = n; const box = document.getElementById("stubPopup"); if(box){ box.innerHTML = ""; box.appendChild(n); } return self; };
+      this.addTo = function(){ let box = document.getElementById("stubPopup"); if(!box){ box = document.createElement("div"); box.id = "stubPopup"; document.getElementById("lmap").appendChild(box); }
+        box.innerHTML = ""; if(node) box.appendChild(node); window.__popup = self; return self; };
+      this.remove = function(){ const box = document.getElementById("stubPopup"); if(box) box.remove(); if(window.__popup === self) window.__popup = null; };
+      this.on = function(){ return self; };
+    },
     LngLatBounds: function(){ this.extend = function(){ return this; }; },
     Marker: function(o){
       const el = o.element;

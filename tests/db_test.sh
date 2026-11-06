@@ -318,6 +318,12 @@ out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSIT
 expect_eq "Zeichnung: Baum als Punkt" "baum" "$(echo "$out" | tail -1)"
 out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','bereich','{\"type\":\"Polygon\",\"coordinates\":[[[8.84,47.23],[8.841,47.23],[8.841,47.231],[8.84,47.23]]]}') returning kind;")
 expect_eq "Zeichnung: Baustellenbereich als geschlossene Fläche" "bereich" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom,seite) values ('$DSITE','erneuern','$LINE','links') returning kind||' '||seite;")
+expect_eq "Zeichnung: Strasse erneuern, nur eine Seite" "erneuern links" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','erneuern','$LINE') returning seite;")
+expect_eq "Zeichnung: ohne Angabe ganze Strasse" "beide" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom,seite) values ('$DSITE','erneuern','$LINE','oben');")
+expect "Zeichnung: unbekannte Seite wird abgelehnt" "violates check constraint" "$out"
 out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','baum','$LINE');")
 expect "Zeichnung: Baum als Linie wird abgelehnt (Art passt nicht zur Geometrie)" "violates check constraint" "$out"
 out=$(as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$DSITE','gas','{\"type\":\"LineString\",\"coordinates\":[[8.84,47.23]]}');")
@@ -362,7 +368,7 @@ expect_eq "Alte Datenbank hat noch keine Tabelle needs" "t" "$($PA -c "select to
 out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
 expect_not "Update: neues schema.sql läuft ohne Fehler über die alte Datenbank" "ERROR" "$out"
 expect_eq "Update: Tabelle needs ist da" "t" "$($PA -c "select to_regclass('public.needs') is not null")"
-expect_eq "Update: Tabelle drawings ist da" "t" "$($PA -c "select to_regclass('public.drawings') is not null")"
+expect_eq "Update: Tabelle drawings ist da (mit Spalte seite)" "true 1" "$($PA -c "select (to_regclass('public.drawings') is not null)::text||' '||(select count(*) from information_schema.columns where table_name='drawings' and column_name='seite')")"
 expect_eq "Update: Tabelle materials ist da" "t" "$($PA -c "select to_regclass('public.materials') is not null")"
 expect_eq "Update: Tabelle downtimes ist da, offene Einträge stimmen mit den gestörten Maschinen überein" "t" "$($PA -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
 expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"

@@ -243,6 +243,7 @@ with sync_playwright() as p:
     d.locator('#tblMachines tbody tr:has(td:nth-child(2) strong:text-is("Walze 1"))').click(); d.wait_for_timeout(100)
     check("Tabellen: Zeile antippen schliesst und oeffnet die Baustelle der Maschine", d.locator("#modal").count() == 0 and d.locator("#detail strong").first.inner_text() == "Umfahrung Nord")
     check("Tabellen: nach dem Schliessen laeuft nichts mehr mit", d.evaluate("tablesRefresh") is None)
+    check("Tabellen: im Modus Leicht wird die Maschine in der Baustelle hervorgehoben", d.locator("#detail .mrow.hl").count() == 1 and "Walze 1" in d.locator("#detail .mrow.hl").inner_text())
     d.evaluate("sites = sites.filter(s => s.id !== 'xss'); render();")
     # Die Vorfuehrung meldet selbst: Absender ist "Simulation", nie eine echte Person, und es ist ein Material aus dem Katalog
     sim = new_page(b, False); sim.goto(URL + "?modus=leicht"); sim.wait_for_timeout(500)
@@ -884,6 +885,107 @@ with sync_playwright() as p:
     check("Zeichnen: Loeschen mit zwei Tipps", z.evaluate("drawings.filter(d => d.kind === 'gas').length") == 0 and "Zeichnung gelöscht: Gasleitung · DN 100" in z.inner_text("#log"))
     z.evaluate("drawings.push({ id:'x1', site:'s3', kind:'hecke', geom:{ type:'LineString', coordinates:[[8.82,47.22],[8.821,47.221]] }, label:'<img src=x onerror=window.__xss3=1>', by:'<b>Hack</b>', createdBy:'x', at:'2026-01-01' }); render();"); z.wait_for_timeout(100)
     check("Zeichnen: Bezeichnung und Name nur als Text", z.evaluate("window.__xss3") is None and "<img src=x" in z.inner_text("#detail") and "<b>Hack</b>" in z.inner_text("#detail"))
+    # ---- Karte hell / dunkel
+    check("Karte: startet hell wie Google Maps (Strassen weiss, Grund hell)", ["background", "background-color", "#eceef1"] in z.evaluate("__paints") and ["highway_minor", "line-color", "#ffffff"] in z.evaluate("__paints") and z.inner_text("#themeBtn") == "Karte: Hell")
+    fits = z.evaluate("window.__fits || 0")
+    z.click("#themeBtn"); z.wait_for_timeout(500)
+    check("Karte: Schalter auf dunkel, Strassen deutlich heller als der Grund, Wahl gemerkt", ["background", "background-color", "#121a22"] in z.evaluate("__paints") and ["highway_minor", "line-color", "#5d6b7c"] in z.evaluate("__paints") and z.evaluate("localStorage.getItem('karte')") == "dunkel" and z.inner_text("#themeBtn") == "Karte: Dunkel")
+    check("Karte: nach dem Wechsel sind Baustellen, Maschinen und Zeichnungen wieder da, Ausschnitt bleibt", all(k in z.evaluate("Object.keys(__mapLayers)") for k in ["site-fill", "mach-3d", "dr-ern-full"]) and z.evaluate("window.__fits || 0") == fits and z.evaluate("mapReady") is True)
+    z.click("#themeBtn"); z.wait_for_timeout(500)
+    check("Karte: zurueck auf hell", z.evaluate("localStorage.getItem('karte')") == "hell" and z.inner_text("#themeBtn") == "Karte: Hell")
+
+    # ---- Maschinen als 3D-Modelle
+    m3 = z.evaluate("__mapData.machines3d.features.map(f => Object.assign({ type:f.geometry.type, n:(f.geometry.coordinates[0] || []).length }, f.properties))")
+    parts = [x for x in m3 if x.get("part")]; rings = [x for x in m3 if x.get("ring")]
+    bag = [x for x in parts if x["mid"] == "1"]
+    check("3D-Karte: jede Maschine hat ein Modell aus Bloecken und einen Ring am Boden", len(rings) == z.evaluate("machines.length") and len(bag) == 7 and all(x["type"] == "Polygon" and x["n"] == 5 for x in parts))
+    check("3D-Karte: echte Groessen (Bagger etwa 3 m hoch, nichts ueber 3.5 m)", max(x["top"] for x in bag) == 3.1 and all(0 <= x["base"] < x["top"] <= 3.5 for x in parts))
+    statusc = set(z.evaluate("['--ok','--wait','--bad','--off'].map(cssVar)"))
+    check("3D-Karte: Modelle neutral, Status nur im Ring (Statusfarbe)", not (set(x["color"] for x in parts) & statusc) and all(x["color"] == z.evaluate("s => cssVar(STATUS_VAR[s])", x["status"]) for x in rings))
+    ly = z.evaluate("__mapLayers")
+    check("3D-Karte: nah Modelle und Schrift, weiter weg Bilder", ly["mach-3d"]["type"] == "fill-extrusion" and ly["mach-3d"]["minzoom"] >= 16 and ly["mach-icon"]["maxzoom"] == 17.5 and ly["mach-label"]["minzoom"] == 17.5)
+    z.evaluate("(()=>{ const m = machines.find(x => x.name === 'Bagger 1'); setMachine(m, { status:'broken', reason:'' }); })()"); z.wait_for_timeout(900)
+    check("3D-Karte: Ring der defekten Maschine blinkt", "broken" in z.evaluate("JSON.stringify(__mapLayers['mach-ring'].paint['line-opacity'])") and any(x["status"] == "broken" and x["mid"] == "1" for x in z.evaluate("__mapData.machines3d.features.map(f => f.properties)") if x.get("ring")))
+    z.evaluate("__mapClickFeature({ mid:'1', site:'s3' })"); z.wait_for_timeout(150)
+    pop = z.inner_text("#stubPopup") if z.locator("#stubPopup").count() else ""
+    check("3D-Karte: Antippen zeigt Fenster mit Name, Art, Status und Baustelle", "Bagger 1" in pop and "Bagger" in pop and "Defekt" in pop and "Baustelle: Kanal Bahnhofstr." in pop and "nicht der echte Standort" in pop, pop.replace("\n", " | "))
+    check("3D-Karte: Antippen oeffnet die Baustelle und markiert die Maschine", z.evaluate("selected") == "s3" and "Bagger 1" in z.locator("#detail .mrow.hl").inner_text())
+    z.evaluate("(()=>{ const m = machines.find(x => x.name === 'Bagger 1'); setMachine(m, { status:'running', reason:'' }); })()"); z.wait_for_timeout(200)
+    check("3D-Karte: Fenster zeigt den neuen Status live", "Läuft" in z.inner_text("#stubPopup") and "Defekt" not in z.inner_text("#stubPopup"))
+    z.evaluate("selectSite('s1')"); z.click("#popGo"); z.wait_for_timeout(100)
+    check("3D-Karte: Knopf im Fenster geht zur Baustelle", z.evaluate("selected") == "s3")
+    z.evaluate("(()=>{ const m = machines.find(x => x.name === 'Dumper 1'); m.name = '<img src=x onerror=window.__xss4=1>'; render(); showMachinePopup(m); })()"); z.wait_for_timeout(100)
+    check("3D-Karte: Name im Fenster nur als Text", z.evaluate("window.__xss4") is None and "<img src=x" in z.inner_text("#stubPopup"))
+    z.evaluate("(()=>{ const m = machines.find(x => x.name.indexOf('<img') === 0); m.name = 'Dumper 1'; render(); })()")
+    z.evaluate("filter.clear(); filter.add('garten'); render();"); z.wait_for_timeout(50)
+    check("3D-Karte: Sparten-Filter graut fremde Maschinen aus", all(x["color"] == "#4b525b" for x in z.evaluate("__mapData.machines3d.features.map(f => f.properties)") if x.get("part") and x["mid"] == "1"))
+    z.evaluate("filter.clear(); render();")
+    # Tabelle -> Karte fliegt zur Maschine
+    z.click("#tablesBtn"); z.click("#tabMachines"); z.wait_for_timeout(100)
+    z.locator('#tblMachines tbody tr:has(td:nth-child(2) strong:text-is("Walze 1"))').click(); z.wait_for_timeout(200)
+    wpos = z.evaluate("machinePositions().get(String(machines.find(x => x.name === 'Walze 1').id)).pos.join(',')")
+    check("Tabelle: Maschine antippen fliegt auf der Karte zu ihr und zeigt das Fenster", z.evaluate("window.__fly") == wpos and "Walze 1" in z.inner_text("#stubPopup") and z.locator("#modal").count() == 0 and z.evaluate("selected") == "s2")
+
+    # ---- Strasse erneuern: Linie folgt dem Strassennetz der Kartendaten
+    z.evaluate("""window.__mapRoads = [
+      { properties:{ class:'minor' }, geometry:{ type:'LineString', coordinates:[[8.8400,47.2300],[8.8420,47.2300],[8.8440,47.2300],[8.8460,47.2300]] } },
+      { properties:{ class:'minor' }, geometry:{ type:'LineString', coordinates:[[8.8440,47.2280],[8.8440,47.2300],[8.8440,47.2320]] } },
+      { properties:{ class:'rail' }, geometry:{ type:'LineString', coordinates:[[8.8405,47.2290],[8.8405,47.2315],[8.8440,47.2315]] } },
+      { properties:{ class:'minor' }, geometry:{ type:'MultiLineString', coordinates:[[[8.8400,47.2400],[8.8460,47.2400]]] } }
+    ];""")
+    z.evaluate("selectSite('s3')"); z.click("#drawBtn"); z.click("#dk-erneuern"); z.wait_for_timeout(50)
+    z.evaluate("__mapClick(47.23001, 8.8405)"); z.wait_for_timeout(50)
+    check("Erneuern: erster Tipp, Ende fehlt noch", "Jetzt das Ende antippen" in z.inner_text("#drawText") and z.locator("#drawDone").is_disabled())
+    z.evaluate("__mapClick(47.2315, 8.84402)"); z.wait_for_timeout(50)
+    path = z.evaluate("drawState.pts")
+    check("Erneuern: Linie folgt der Strasse um die Ecke (auf die Strasse gezogen, ueber die Kreuzung)", path[0] == [8.8405, 47.23] and [8.844, 47.23] in path and abs(path[-1][0] - 8.844) < 1e-9 and abs(path[-1][1] - 47.2315) < 1e-9, str(path))
+    check("Erneuern: Bahn wird nicht als Strasse benutzt", not any(abs(p[0] - 8.8405) < 1e-9 and p[1] > 47.2301 for p in path))
+    exp_len = z.evaluate("drawingMeasure({ geom:{ type:'LineString', coordinates:drawState.pts } })")
+    check("Erneuern: Laenge angezeigt, Fertig moeglich", exp_len in z.inner_text("#drawText") and exp_len == "ca. 430 m" and not z.locator("#drawDone").is_disabled(), exp_len)
+    check("Erneuern: Seiten nach Himmelsrichtung waehlbar", z.inner_text("#side-links") == "Nur Nordseite" and z.inner_text("#side-rechts") == "Nur Südseite" and "on" in z.get_attribute("#side-beide", "class"))
+    z.click("#side-links"); z.wait_for_timeout(50)
+    band = [f["properties"] for f in z.evaluate("__mapData['draw-preview'].features") if f["geometry"]["type"] == "LineString"]
+    check("Erneuern: Vorschau zeigt nur die gewaehlte Seite (halbe Breite, versetzt)", band and band[0]["band"] is True and band[0]["w"] == 0.5 and band[0]["off"] == -1)
+    z.evaluate("__mapClick(47.2319, 8.84401)"); z.wait_for_timeout(50)
+    check("Erneuern: weiterer Tipp verlaengert der Strasse entlang", abs(z.evaluate("drawState.pts")[-1][1] - 47.2319) < 1e-9)
+    z.click("#drawUndo"); z.wait_for_timeout(50)
+    check("Erneuern: zuruecknehmen entfernt den letzten Tipp", abs(z.evaluate("drawState.pts")[-1][1] - 47.2315) < 1e-9 and z.evaluate("drawState.taps.length") == 2)
+    z.click("#drawDone"); z.wait_for_timeout(100)
+    ern = z.evaluate("drawings.filter(d => d.kind === 'erneuern')")
+    check("Erneuern: gespeichert mit Seite und der Linie entlang der Strasse", len(ern) == 1 and ern[0]["seite"] == "links" and ern[0]["geom"]["coordinates"] == path)
+    check("Erneuern: Liste und Karte nennen 'nur Nordseite'", "Strasse erneuern · nur Nordseite" in z.inner_text("#detail") and any(x["kind"] == "erneuern" and x["w"] == 0.5 and x["off"] == -1 and "nur Nordseite" in x["text"] for x in z.evaluate("__mapData.drawings.features.map(f => f.properties)")))
+    ly = z.evaluate("__mapLayers")
+    check("Erneuern: rot-weiss gestreift (rote Linie mit weissen Streifen), nicht blinkend", ly["dr-ern-full"]["paint"]["line-color"] == "#d93a3a" and ly["dr-ern-full-w"]["paint"]["line-dasharray"] == [1, 1] and ly["dr-ern-half-w"]["paint"]["line-color"] == "#ffffff" and "broken" not in str(ly["dr-ern-full"]["paint"]))
+    # Vereinfachte Kartendaten: gemeinsamer Punkt an der Kreuzung fehlt (Einmündung, Kreuzung), Brücke darf nicht verbinden
+    z.evaluate("""window.__mapRoads = [
+      { properties:{ class:'minor' }, geometry:{ type:'LineString', coordinates:[[8.8400,47.2300],[8.8460,47.2300]] } },
+      { properties:{ class:'minor' }, geometry:{ type:'LineString', coordinates:[[8.8440,47.2300],[8.8440,47.2320]] } },
+      { properties:{ class:'minor' }, geometry:{ type:'LineString', coordinates:[[8.8420,47.2280],[8.8420,47.2320]] } },
+      { properties:{ class:'primary', brunnel:'bridge', layer:1 }, geometry:{ type:'LineString', coordinates:[[8.8450,47.2280],[8.8450,47.2320]] } }
+    ];""")
+    z.click("#drawBtn"); z.click("#dk-erneuern")
+    z.evaluate("__mapClick(47.23001, 8.8405)"); z.evaluate("__mapClick(47.2315, 8.84402)"); z.wait_for_timeout(50)
+    pt = z.evaluate("drawState.pts")
+    check("Erneuern: Einmuendung ohne gemeinsamen Punkt wird trotzdem verbunden", not z.evaluate("drawState.err") and any(abs(p[0] - 8.844) < 1e-7 and abs(p[1] - 47.23) < 1e-7 for p in pt), str(pt))
+    z.click("#drawUndo"); z.evaluate("__mapClick(47.2310, 8.84201)"); z.wait_for_timeout(50)
+    pt = z.evaluate("drawState.pts")
+    check("Erneuern: Kreuzung ohne gemeinsamen Punkt wird verbunden", not z.evaluate("drawState.err") and any(abs(p[0] - 8.842) < 1e-7 and abs(p[1] - 47.23) < 1e-7 for p in pt), str(pt))
+    z.click("#drawUndo"); z.evaluate("__mapClick(47.2310, 8.84501)"); z.wait_for_timeout(50)
+    check("Erneuern: Bruecke ist nicht mit der Strasse darunter verbunden", "keine zusammenhängende Strasse" in z.inner_text("#drawText"))
+    z.click("#drawCancel")
+    z.evaluate("""window.__mapRoads = [
+      { properties:{ class:'minor' }, geometry:{ type:'LineString', coordinates:[[8.8400,47.2300],[8.8420,47.2300],[8.8440,47.2300],[8.8460,47.2300]] } },
+      { properties:{ class:'minor' }, geometry:{ type:'MultiLineString', coordinates:[[[8.8400,47.2400],[8.8460,47.2400]]] } }
+    ];""")
+    z.click("#drawBtn"); z.click("#dk-erneuern"); z.evaluate("__mapClick(47.25, 8.80)"); z.wait_for_timeout(50)
+    check("Erneuern: Tipp neben jede Strasse gibt einen klaren Hinweis", "liegt nicht auf einer Strasse" in z.inner_text("#drawText") and z.locator("#drawManual").is_visible())
+    z.click("#drawUndo"); z.evaluate("__mapClick(47.23001, 8.8410)"); z.evaluate("__mapClick(47.24001, 8.8410)"); z.wait_for_timeout(50)
+    check("Erneuern: keine zusammenhaengende Strasse -> Hinweis, Fertig gesperrt", "keine zusammenhängende Strasse" in z.inner_text("#drawText") and z.locator("#drawDone").is_disabled())
+    z.click("#drawManual"); z.wait_for_timeout(50)
+    check("Erneuern: von Hand zeichnen uebernimmt die Tipps", z.evaluate("drawState.manual") is True and len(z.evaluate("drawState.pts")) == 2 and not z.locator("#drawDone").is_disabled() and not z.locator("#drawManual").is_visible())
+    z.click("#drawCancel")
+    z.evaluate("window.__mapRoads = [];")
+
     z.click("#modeBtn"); z.wait_for_timeout(200)
     check("Zeichnen: im Modus Leicht steht die Liste mit Hinweis, ohne Karte", "Abwasser · DN 300" in z.inner_text("#detail") and "Zeichnen geht im Modus 3D" in z.inner_text("#detail") and z.locator("#drawBtn").count() == 0)
     z.click("#modeBtn"); z.wait_for_timeout(600)

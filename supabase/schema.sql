@@ -97,7 +97,7 @@ create index if not exists machines_site_idx on public.machines(site_id);
 create index if not exists needs_site_idx on public.needs(site_id);
 create index if not exists activity_created_idx on public.activity(created_at desc);
 
--- Zeichnungen auf der Karte je Baustelle: Linien (Strasse, Leitungen, Hecke), Punkte (Baum), Flächen.
+-- Zeichnungen auf der Karte je Baustelle: Linien (Strasse, Strasse erneuern, Leitungen, Hecke), Punkte (Baum), Flächen.
 -- geom ist eine GeoJSON-Geometrie [Längengrad, Breitengrad]. Nur eine Skizze zur Übersicht, keine Vermessung:
 -- gezeichnete Leitungen ersetzen keinen Werkleitungsplan.
 create table if not exists public.drawings (
@@ -111,6 +111,10 @@ create table if not exists public.drawings (
   created_at  timestamptz not null default now()
 );
 create index if not exists drawings_site_idx on public.drawings(site_id);
+-- Welche Seite einer Linie betroffen ist (z. B. nur eine Strassenseite): links/rechts in Zeichnungsrichtung
+alter table public.drawings add column if not exists seite text not null default 'beide';
+alter table public.drawings drop constraint if exists drawings_seite_check;
+alter table public.drawings add constraint drawings_seite_check check (seite in ('beide', 'links', 'rechts'));
 
 -- ---------------------------------------------------------------- Hilfsfunktionen
 
@@ -156,7 +160,7 @@ begin
   if c is null or jsonb_typeof(c) <> 'array' then return false; end if;
   if k = 'baum' then
     return t = 'Point' and public.drawing_pos_ok(c);
-  elsif k in ('strasse', 'wasser', 'abwasser', 'gas', 'strom', 'kabel', 'hecke') then
+  elsif k in ('strasse', 'erneuern', 'wasser', 'abwasser', 'gas', 'strom', 'kabel', 'hecke') then
     if t is distinct from 'LineString' then return false; end if;
     n := jsonb_array_length(c);
     if n < 2 or n > 500 then return false; end if;

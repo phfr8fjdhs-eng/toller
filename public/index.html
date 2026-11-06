@@ -157,7 +157,19 @@
   .drawkinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px}
   button.drawkind{display:flex;align-items:center;gap:8px;min-height:44px;text-align:left}
   #drawBar{position:fixed;left:0;right:0;top:0;z-index:70;background:#1f6feb;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  #drawBar span{flex:1 1 220px}
+  #drawBar #drawText{flex:1 1 260px}
+  #drawSides{display:flex;gap:6px;flex-wrap:wrap}
+  #drawSides[hidden]{display:none}
+  #drawSides button.on{background:#0f1419;color:#fff;border-color:#0f1419}
+  .mrow.hl{outline:2px solid var(--sel);outline-offset:2px;border-radius:8px}
+  .mpop{display:flex;flex-direction:column;gap:4px;font-size:13px;min-width:180px}
+  .mpop .st{display:flex;align-items:center;gap:6px}
+  .mpop .small{font-size:11px}
+  .mpop button{margin-top:4px;min-height:40px}
+  .machpopup .maplibregl-popup-content{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .machpopup .maplibregl-popup-tip{border-top-color:var(--panel);border-bottom-color:var(--panel)}
+  .machpopup .maplibregl-popup-close-button{color:var(--text);font-size:20px;width:32px;height:32px}
+  .swatch.stripes{background:repeating-linear-gradient(45deg,#d93a3a 0 4px,#ffffff 4px 8px)}
   #drawBar button{min-height:44px;background:#fff;color:#0f1419;border-color:#fff}
   #drawBar button.primary{font-weight:700}
   #drawBar button:disabled{opacity:.55}
@@ -269,6 +281,7 @@
       <div class="mapbtns">
         <button id="btn3d" class="active">Gelände 3D</button>
         <button id="btnOverview">Übersicht</button>
+        <button id="themeBtn">Karte: Hell</button>
       </div>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <path d="M0 42 C 25 36, 45 58, 100 34" fill="none" stroke="#243140" stroke-width="3" vector-effect="non-scaling-stroke"/>
@@ -324,7 +337,7 @@
   </div>
 </div>
 
-<div id="drawBar" hidden><span id="drawText"></span><button id="drawUndo" type="button">Letzten Punkt zurück</button><button id="drawDone" type="button" class="primary">Fertig</button><button id="drawCancel" type="button">Abbrechen</button></div>
+<div id="drawBar" hidden><span id="drawText"></span><span id="drawSides" hidden></span><button id="drawManual" type="button" hidden>Von Hand zeichnen</button><button id="drawUndo" type="button">Letzten Punkt zurück</button><button id="drawDone" type="button" class="primary">Fertig</button><button id="drawCancel" type="button">Abbrechen</button></div>
 <div id="pickBar" hidden><span>Tippe auf die Karte, um den Ort der Baustelle zu wählen.</span><button id="pickCancel">Abbrechen</button></div>
 <div id="v3d" class="overlay solid v3" role="dialog" aria-modal="true" aria-labelledby="v3Title" hidden>
   <div class="v3wrap">
@@ -805,6 +818,7 @@ async function deleteSite(s){
    berechnet und als "ca." angezeigt. Löschen dürfen der Zeichner und Admins (Regeln in der Datenbank). */
 const DRAW_KINDS = {
   strasse: { t:"Strasse / Weg", g:"line", color:"#59636e" },
+  erneuern:{ t:"Strasse erneuern", g:"line", color:"#d93a3a", snap:true },     // rot-weiss gestreift wie ein Absperrband, folgt der echten Strasse
   wasser:  { t:"Wasserleitung", g:"line", color:"#3b82f6", leitung:true },
   abwasser:{ t:"Abwasser", g:"line", color:"#9a6a48", leitung:true },
   gas:     { t:"Gasleitung", g:"line", color:"#a78bfa", leitung:true },
@@ -816,9 +830,21 @@ const DRAW_KINDS = {
   rasen:   { t:"Rasen / Pflanzfläche", g:"area", color:"#8aa05a" },
   belag:   { t:"Belag", g:"area", color:"#a7b1bc" }
 };
-const DRAW_ORDER = ["strasse","wasser","abwasser","gas","strom","kabel","hecke","baum","bereich","rasen","belag"];
+const DRAW_ORDER = ["erneuern","strasse","wasser","abwasser","gas","strom","kabel","hecke","baum","bereich","rasen","belag"];
 const LEITUNG_HINWEIS = "Gezeichnete Leitungen sind eine Skizze und ersetzen keinen Werkleitungsplan. Vor dem Graben Pläne einholen.";
-const mapDrawing = r => ({ id:r.id, site:r.site_id, kind:r.kind, geom:r.geom, label:r.label || "", by:r.author || "", createdBy:r.created_by, at:r.created_at });
+const mapDrawing = r => ({ id:r.id, site:r.site_id, kind:r.kind, geom:r.geom, label:r.label || "", seite:r.seite || "beide", by:r.author || "", createdBy:r.created_by, at:r.created_at });
+let seiteOk = true;    // false, wenn die Spalte drawings.seite noch fehlt (schema.sql erneut ausführen)
+
+// Welche Himmelsrichtung ist "links" bzw. "rechts" einer Linie (von Anfang zu Ende)? Für "nur Nordseite" usw.
+function sideNames(pts){
+  const a = pts[0], b = pts[pts.length - 1] || a;
+  const kx = 111320 * Math.cos(a[1] * Math.PI / 180), ky = 110574;
+  let dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky;
+  if(Math.hypot(dx, dy) < 1 && pts[1]){ dx = (pts[1][0] - a[0]) * kx; dy = (pts[1][1] - a[1]) * ky; }
+  const name = (x, y) => Math.abs(x) > Math.abs(y) ? (x > 0 ? "Ostseite" : "Westseite") : (y > 0 ? "Nordseite" : "Südseite");
+  return { links:name(-dy, dx), rechts:name(dy, -dx) };
+}
+const sideOf = d => (d.seite && d.seite !== "beide" && d.geom && d.geom.type === "LineString") ? sideNames(d.geom.coordinates)[d.seite] : "";
 function upsertDrawing(d){ const i = drawings.findIndex(x => x.id === d.id); if(i >= 0) drawings[i] = d; else drawings.push(d); }
 const canDeleteDrawing = d => isAdmin() || (LIVE && me && d.createdBy === me.id);
 
@@ -850,20 +876,22 @@ function drawingMeasure(d){
   if(g.type === "Polygon"){ const a = geoArea((g.coordinates || [])[0] || []); return "ca. " + (a < 1000 ? Math.round(a) : Math.round(a / 10) * 10) + " m²"; }
   return "";
 }
-const drawingTitle = d => (DRAW_KINDS[d.kind] ? DRAW_KINDS[d.kind].t : d.kind) + (d.label ? " · " + d.label : "");
+const drawingTitle = d => (DRAW_KINDS[d.kind] ? DRAW_KINDS[d.kind].t : d.kind) + (sideOf(d) ? " · nur " + sideOf(d) : "") + (d.label ? " · " + d.label : "");
 
-async function addDrawings(s, kind, geoms, label){
+async function addDrawings(s, kind, geoms, label, seite){
   label = String(label || "").replace(/\s+/g, " ").trim().slice(0, 60);
+  seite = seite === "links" || seite === "rechts" ? seite : "beide";
   if(!geoms.length) return false;
   if(!LIVE){
-    geoms.forEach(g => drawings.push({ id:"z" + (++localId), site:s.id, kind, geom:g, label, by:"Demo", createdBy:"demo", at:new Date().toISOString() }));
+    geoms.forEach(g => drawings.push({ id:"z" + (++localId), site:s.id, kind, geom:g, label, seite, by:"Demo", createdBy:"demo", at:new Date().toISOString() }));
   }else{
     if(!drawingsOk){ toast("Nicht gespeichert: Datenbank-Update nötig (schema.sql erneut ausführen).", true); return false; }
-    const r = await sb.from("drawings").insert(geoms.map(g => ({ site_id:s.id, kind, geom:g, label }))).select();
+    if(seite !== "beide" && !seiteOk){ toast("Nur eine Strassenseite braucht ein Datenbank-Update (schema.sql erneut ausführen).", true); return false; }
+    const r = await sb.from("drawings").insert(geoms.map(g => seite !== "beide" ? { site_id:s.id, kind, geom:g, label, seite } : { site_id:s.id, kind, geom:g, label })).select();
     if(r.error){ toast("Zeichnung konnte nicht gespeichert werden: " + r.error.message, true); return false; }
     r.data.forEach(row => upsertDrawing(mapDrawing(row)));
   }
-  const k = DRAW_KINDS[kind].t;
+  const k = DRAW_KINDS[kind].t + (seite !== "beide" && geoms[0].type === "LineString" ? " nur " + sideNames(geoms[0].coordinates)[seite] : "");
   addLog("Gezeichnet: " + (geoms.length > 1 ? geoms.length + " × " : "") + k + (label ? " " + label : "") + " (" + s.name + ")");
   render();
   return true;
@@ -900,7 +928,7 @@ function renderDrawings(box, s){
   if(list.some(d => DRAW_KINDS[d.kind] && DRAW_KINDS[d.kind].leitung)) box.appendChild(el("div", "warn", LEITUNG_HINWEIS));
   list.slice(0, 40).forEach(d=>{
     const r = el("div", "drow");
-    const sw = el("span", "swatch"); sw.style.background = (DRAW_KINDS[d.kind] && DRAW_KINDS[d.kind].color) || "transparent";
+    const sw = el("span", "swatch" + (d.kind === "erneuern" ? " stripes" : "")); if(d.kind !== "erneuern") sw.style.background = (DRAW_KINDS[d.kind] && DRAW_KINDS[d.kind].color) || "transparent";
     if(d.kind === "bereich") sw.style.border = "2px solid var(--muted)";
     r.appendChild(sw);
     const t = el("div", "mtxt");
@@ -919,13 +947,13 @@ function modalDraw(s){
   const body = el("div", "form");
   const lab = input("text", "", "drawLabel"); lab.maxLength = 60; lab.placeholder = "z. B. DN 150, Linde, Zufahrt Nord";
   body.appendChild(field("Bezeichnung (freiwillig)", lab));
-  const groups = [["Linien", "line"], ["Punkte (mehrere nacheinander möglich)", "point"], ["Flächen", "area"]];
+  const groups = [["Auf der echten Strasse (Linie folgt der Strasse)", "snap"], ["Linien", "line"], ["Punkte (mehrere nacheinander möglich)", "point"], ["Flächen", "area"]];
   groups.forEach(([title, g])=>{
     body.appendChild(el("div", "sub", title));
     const wrap = el("div", "drawkinds");
-    DRAW_ORDER.filter(k => DRAW_KINDS[k].g === g).forEach(k=>{
+    DRAW_ORDER.filter(k => g === "snap" ? DRAW_KINDS[k].snap : DRAW_KINDS[k].g === g && !DRAW_KINDS[k].snap).forEach(k=>{
       const b = el("button", "drawkind"); b.type = "button"; b.id = "dk-" + k;
-      const sw = el("span", "swatch"); sw.style.background = DRAW_KINDS[k].color || "transparent";
+      const sw = el("span", "swatch" + (k === "erneuern" ? " stripes" : "")); sw.style.background = k === "erneuern" ? "" : (DRAW_KINDS[k].color || "transparent");
       if(k === "bereich") sw.style.border = "2px solid var(--muted)";
       b.appendChild(sw); b.appendChild(el("span", "", DRAW_KINDS[k].t));
       b.onclick = ()=>startDrawing(s, k, lab.value);
@@ -1250,7 +1278,8 @@ function renderDetail(){
   const list = machines.filter(m => loc(m) === s.id);
   if(!list.length) box.appendChild(el("div", "empty", "Keine Maschinen hier."));
   list.forEach(m=>{
-    const r = el("div", "mrow");
+    const r = el("div", "mrow" + (hlMachine === String(m.id) ? " hl" : ""));
+    r.setAttribute("data-mid", String(m.id));
     r.appendChild(el("span", "dot " + m.status));
     const t = el("div", "mtxt");
     t.appendChild(el("div", "mname", m.name));
@@ -1799,13 +1828,28 @@ let lmap = null, mapReady = false, is3D = true;
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const SITE_R = 35;                     // Radius der Baustellenfläche in Metern, solange keine Strecke gezeichnet ist
-const SITE_LAYERS = ["mach-icon", "dr-tree", "dr-leitung", "dr-line", "dr-strasse", "dr-belag", "dr-rasen", "site-fill", "site-line", "site-dot", "site-label"];
+const SITE_LAYERS = ["mach-3d", "mach-ring", "mach-label", "mach-icon", "dr-tree", "dr-leitung", "dr-line", "dr-strasse", "dr-ern-full", "dr-ern-half", "dr-belag", "dr-rasen", "site-fill", "site-line", "site-dot", "site-label"];
 const MACH_KINDS = ["bagger","mini","dumper","lkw","walze","fertiger","lader","tele","platte","maeher","allg"];
 let drawState = null;                  // { site, kind, label, pts:[[lng,lat], …] } solange gezeichnet wird
 let blinkTimer = null, blinkOn = true;
 
-/* Die Grundkarte (hell) wird beim Laden dunkel umgefärbt, statt sie per CSS-Filter umzukehren.
-   So erscheinen die Statusfarben auf der Karte genau gleich wie überall sonst. */
+/* Karte hell (Standard, wie Google Maps) oder dunkel. Die Wahl wird im Gerät gemerkt.
+   Die dunkle Karte wird beim Laden umgefärbt, nie per CSS-Filter (sonst stimmen die Statusfarben nicht). */
+let mapTheme = (()=>{ try{ return localStorage.getItem("karte") === "dunkel" ? "dunkel" : "hell"; }catch(e){ return "hell"; } })();
+function styleBasemap(){ if(mapTheme === "dunkel") darkenBasemap(); else lightenBasemap(); }
+// Helle Karte: Strassen weiss mit deutlichem Rand, Strassennamen dunkel, damit man sie gut findet
+function lightenBasemap(){
+  ((lmap.getStyle() || {}).layers || []).forEach(l=>{
+    const id = l.id.toLowerCase();
+    const set = (k, v)=>{ try{ lmap.setPaintProperty(l.id, k, v); }catch(e){} };
+    const road = /highway|road|street|transportation|bridge|tunnel/.test(id) && !/rail|name|label|shield/.test(id);
+    if(l.type === "background") set("background-color", "#eceef1");
+    else if(l.type === "line" && road) set("line-color", /casing/.test(id) ? "#aeb6c0" : /path|track/.test(id) ? "#c9ced5" : "#ffffff");
+    else if(l.type === "symbol" && l.layout && l.layout["text-field"] && /highway|road|street|transportation/.test(id)){
+      set("text-color", "#2f3640"); set("text-halo-color", "#ffffff");
+    }
+  });
+}
 function darkenBasemap(){
   ((lmap.getStyle() || {}).layers || []).forEach(l=>{
     const id = l.id.toLowerCase();
@@ -1816,9 +1860,9 @@ function darkenBasemap(){
       set("fill-outline-color", "rgba(0,0,0,0)");
     }
     else if(l.type === "line") set("line-color", /water|river/.test(id) ? "#163449" : /boundary|admin/.test(id) ? "#3a4757"
-      : /motorway|trunk|primary/.test(id) ? "#4a5868" : /rail/.test(id) ? "#39424d" : "#2f3b4a");
+      : /casing/.test(id) ? "#0b1015" : /motorway|trunk|primary/.test(id) ? "#8592a1" : /rail/.test(id) ? "#39424d" : "#5d6b7c");   // Strassen deutlich heller als der Grund
     else if(l.type === "symbol" && l.layout && l.layout["text-field"]){
-      set("text-color", /water/.test(id) ? "#4f7a99" : "#8b98a5");
+      set("text-color", /water/.test(id) ? "#4f7a99" : /highway|road|street|transportation/.test(id) ? "#c9d1d9" : "#8b98a5");
       set("text-halo-color", "#0f1419");
     }
   });
@@ -1826,9 +1870,28 @@ function darkenBasemap(){
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const STATUS_VAR = { running:"--ok", waiting:"--wait", broken:"--bad", off:"--off" };
 
+function rebuildMap(){
+  if(!lmap) return;
+  const c = lmap.getCenter();
+  const cam = { center:[c.lng, c.lat], zoom:lmap.getZoom(), pitch:lmap.getPitch(), bearing:lmap.getBearing() };
+  closeMachPopup();
+  if(blinkTimer){ clearInterval(blinkTimer); blinkTimer = null; }
+  if(drawState) endDrawing();
+  try{ lmap.remove(); }catch(e){}
+  lmap = null; mapReady = false; $("lmap").innerHTML = "";
+  initRealMap(cam);
+}
+function setMapTheme(t){
+  mapTheme = t;
+  try{ localStorage.setItem("karte", t); }catch(e){}
+  const b = $("themeBtn"); if(b) b.textContent = t === "dunkel" ? "Karte: Dunkel" : "Karte: Hell";
+  rebuildMap();
+}
+
 function fallbackToSketch(){
   if(blinkTimer){ clearInterval(blinkTimer); blinkTimer = null; }
   if(drawState) endDrawing();
+  closeMachPopup();
   if(lmap){ try{ lmap.remove(); }catch(e){} }
   lmap = null; mapReady = false;
   $("lmap").innerHTML = "";
@@ -1875,35 +1938,145 @@ function siteCenter(s){
   const ring = ber.geom.coordinates[0].slice(0, -1);
   return [ring.reduce((a, p) => a + p[0], 0) / ring.length, ring.reduce((a, p) => a + p[1], 0) / ring.length];
 }
-function machineGeo(){
-  const feats = [];
+// Position und Ausrichtung je Maschine (Spirale um die Mitte, etwa 11 m Abstand, Richtung fest je Maschine)
+function machinePositions(){
+  const out = new Map();
   sites.concat([DEPOT]).forEach(s=>{
     const ms = machines.filter(m => loc(m) === s.id).sort((a, b) => String(a.name).localeCompare(String(b.name), "de"));
     const [cx, cy] = siteCenter(s);
     const kx = 111320 * Math.cos(cy * Math.PI / 180), ky = 110574;
     ms.forEach((m, i)=>{
-      const r = 9 * Math.sqrt(i + 1), a = (i + 1) * 2.39996;            // Sonnenblumen-Spirale, etwa 9 m Abstand
-      const st = m.status;
-      feats.push({ type:"Feature", geometry:{ type:"Point", coordinates:[cx + r * Math.cos(a) / kx, cy + r * Math.sin(a) / ky] },
-        properties:{ id:String(m.id), site:s.id, status:st, img:"mi-" + machKind(m.typ) + "-" + st, dim:!showSparte(m.sparte),
-          label:m.name + (st === "broken" ? "\nDefekt" : st === "waiting" ? "\n" + (m.reason.indexOf("Diesel") === 0 ? "Diesel fehlt" : "Material fehlt") : "") } });
+      const r = 11 * Math.sqrt(i + 1), a = (i + 1) * 2.39996;            // Sonnenblumen-Spirale
+      let h = 0; String(m.id).split("").forEach(c => { h = (h * 31 + c.charCodeAt(0)) % 360; });
+      out.set(String(m.id), { pos:[cx + r * Math.cos(a) / kx, cy + r * Math.sin(a) / ky], heading:h * Math.PI / 180, site:s.id, kx, ky });
     });
   });
+  return out;
+}
+const machLabel = m => m.name + (m.status === "broken" ? "\nDefekt" : m.status === "waiting" ? "\n" + (m.reason.indexOf("Diesel") === 0 ? "Diesel fehlt" : "Material fehlt") : "");
+function machineGeo(pos){
+  pos = pos || machinePositions();
+  return { type:"FeatureCollection", features:machines.filter(m => pos.has(String(m.id))).map(m=>{
+    const p = pos.get(String(m.id));
+    return { type:"Feature", geometry:{ type:"Point", coordinates:p.pos },
+      properties:{ id:String(m.id), site:p.site, status:m.status, img:"mi-" + machKind(m.typ) + "-" + m.status, dim:!showSparte(m.sparte), label:machLabel(m) } };
+  }) };
+}
+/* 3D-Modelle der Maschinen aus Blöcken in echter Grösse (Meter): [vorne von, bis, links von, bis, unten, oben, Farbe].
+   Farben neutral (nie Statusfarben), der Status steht im Ring am Boden und in der Schrift. */
+const M3 = { body:"#aeb7c1", dark:"#3a3f47", cab:"#6189b0", arm:"#c7cfd8", tool:"#5d636b", box:"#8c959f" };
+const MACH3D = {
+  bagger:[[-2.2,2.2,0.8,1.4,0,0.9,"dark"],[-2.2,2.2,-1.4,-0.8,0,0.9,"dark"],[-1.9,1,-1.3,1.3,0.9,2.3,"body"],[0,1.2,0.25,1.25,0.9,3.1,"cab"],
+          [1,4.2,-0.3,0.3,2,2.7,"arm"],[4,4.6,-0.25,0.25,0.7,2.9,"arm"],[4,5,-0.6,0.6,0,0.7,"tool"]],
+  mini:[[-1.1,1.1,0.4,0.75,0,0.5,"dark"],[-1.1,1.1,-0.75,-0.4,0,0.5,"dark"],[-1,0.5,-0.7,0.7,0.5,1.4,"body"],[-0.3,0.5,-0.1,0.6,0.5,2.4,"cab"],
+        [0.5,2.3,-0.15,0.15,1.1,1.5,"arm"],[2.2,2.5,-0.13,0.13,0.4,1.6,"arm"],[2.1,2.7,-0.35,0.35,0,0.45,"tool"]],
+  dumper:[[-1.6,1.6,-0.8,0.8,0.3,1,"body"],[0.6,1.4,-0.95,-0.75,0,0.8,"dark"],[0.6,1.4,0.75,0.95,0,0.8,"dark"],[-1.4,-0.6,-0.95,-0.75,0,0.8,"dark"],
+          [-1.4,-0.6,0.75,0.95,0,0.8,"dark"],[0.3,1.9,-0.85,0.85,1,1.8,"tool"],[-1.5,-0.9,-0.6,0.6,1,2.4,"cab"]],
+  lkw:[[-4,4,-1.2,1.2,0.5,1.2,"dark"],[2.4,4,-1.25,1.25,1.2,3.2,"body"],[3.6,4.05,-1.1,1.1,2.2,3,"cab"],[-4,2.2,-1.2,1.2,1.2,2.9,"box"]],
+  walze:[[1,1.9,-1.05,1.05,0,1.2,"dark"],[-1.9,-1,-1.05,1.05,0,1.2,"dark"],[-1,1,-0.9,0.9,0.4,1.8,"body"],[-0.6,0.4,-0.7,0.7,1.8,3,"cab"]],
+  fertiger:[[1.6,3,-1.5,1.5,0.4,1.4,"tool"],[-1.8,1.6,0.8,1.3,0,0.7,"dark"],[-1.8,1.6,-1.3,-0.8,0,0.7,"dark"],[-1.8,1.6,-1.3,1.3,0.7,2.2,"body"],
+            [-2.8,-1.8,-1.7,1.7,0,0.6,"tool"],[-1.8,0.2,-1.3,1.3,3,3.2,"cab"]],
+  lader:[[1,2.2,-1.25,-0.85,0,1.3,"dark"],[1,2.2,0.85,1.25,0,1.3,"dark"],[-2.4,-1.2,-1.25,-0.85,0,1.3,"dark"],[-2.4,-1.2,0.85,1.25,0,1.3,"dark"],
+         [0.4,2.4,-0.85,0.85,0.6,1.6,"body"],[-2.6,0.2,-1.15,1.15,0.6,1.9,"body"],[-0.9,0.5,-0.8,0.8,1.9,3.3,"cab"],[2.2,3.6,-0.9,0.9,1,1.4,"arm"],[3.4,4.4,-1.3,1.3,0,1.1,"tool"]],
+  tele:[[-2.2,2.2,-1.15,1.15,0.4,1.4,"body"],[-0.6,0.9,0.4,1.15,1.4,2.6,"cab"],[-2.4,3.4,-0.35,0.35,1.6,2.2,"arm"],[3.4,4.6,-0.6,0.6,0.2,0.4,"tool"],
+        [1,2,-1.25,-1.15,0,1.1,"dark"],[1,2,1.15,1.25,0,1.1,"dark"],[-2,-1,-1.25,-1.15,0,1.1,"dark"],[-2,-1,1.15,1.25,0,1.1,"dark"]],
+  platte:[[-0.45,0.45,-0.3,0.3,0,0.25,"tool"],[-0.25,0.25,-0.2,0.2,0.25,0.7,"body"]],
+  maeher:[[0.4,1.4,-0.65,0.65,0,0.3,"tool"],[-0.9,0.5,-0.5,0.5,0.2,0.9,"body"],[-0.6,-0.2,-0.3,0.3,0.9,1.3,"cab"]],
+  allg:[[-1.5,1.5,-1,1,0.3,2,"body"],[-1.5,-0.3,-0.8,0.8,2,3,"cab"]]
+};
+function mach3dGeo(pos){
+  pos = pos || machinePositions();
+  const feats = [];
+  machines.forEach(m=>{
+    const p = pos.get(String(m.id)); if(!p) return;
+    const parts = MACH3D[machKind(m.typ)] || MACH3D.allg, c = Math.cos(p.heading), sn = Math.sin(p.heading), dim = !showSparte(m.sparte);
+    const toLL = (x, y) => [p.pos[0] + (x * c - y * sn) / p.kx, p.pos[1] + (x * sn + y * c) / p.ky];
+    let rad = 0;
+    parts.forEach(([x0, x1, y0, y1, base, top, col])=>{
+      const ring = [toLL(x0, y0), toLL(x1, y0), toLL(x1, y1), toLL(x0, y1), toLL(x0, y0)];
+      rad = Math.max(rad, Math.hypot(x0, y0), Math.hypot(x1, y1), Math.hypot(x0, y1), Math.hypot(x1, y0));
+      feats.push({ type:"Feature", geometry:{ type:"Polygon", coordinates:[ring] },
+        properties:{ mid:String(m.id), site:p.site, part:true, base, top, color:dim ? "#4b525b" : M3[col] } });
+    });
+    // Ring am Boden in der Statusfarbe
+    const r = rad + 1, ring = [];
+    for(let i = 0; i <= 28; i++){ const a = i / 28 * 2 * Math.PI; ring.push([p.pos[0] + r * Math.cos(a) / p.kx, p.pos[1] + r * Math.sin(a) / p.ky]); }
+    feats.push({ type:"Feature", geometry:{ type:"LineString", coordinates:ring },
+      properties:{ mid:String(m.id), site:p.site, ring:true, status:m.status, color:cssVar(STATUS_VAR[m.status]), dim } });
+  });
   return { type:"FeatureCollection", features:feats };
+}
+
+/* Fenster mit den Angaben zur Maschine (beim Antippen auf der Karte oder aus der Tabelle). Nur textContent. */
+let machPopup = null, popupMid = null, hlMachine = null;
+function machineInfo(m){
+  const box = el("div", "mpop");
+  box.appendChild(el("strong", "", m.name));
+  box.appendChild(el("div", "muted", [m.typ, m.sparte ? SPARTEN[m.sparte] : ""].filter(Boolean).join(" · ")));
+  const st = el("div", "st");
+  st.appendChild(el("span", "dot " + m.status));
+  st.appendChild(el("span", "", m.status === "waiting" ? m.reason : LABEL[m.status]));
+  box.appendChild(st);
+  const who = reportedBy(m); if(who) box.appendChild(el("div", "muted", who));
+  const s = m.site ? findSite(m.site) : null;
+  box.appendChild(el("div", "muted", m.site ? "Baustelle: " + (s ? s.name : "gelöscht") : "Im Werkhof"));
+  box.appendChild(el("div", "muted small", "Platz auf der Karte: nur angeordnet, nicht der echte Standort."));
+  const b = el("button", "", m.site ? "Zur Baustelle" : "Zum Werkhof"); b.type = "button"; b.id = "popGo";
+  b.onclick = ()=>{ selectSite(loc(m)); flashMachine(m); const d = $("detail"); if(d && d.scrollIntoView) d.scrollIntoView({ behavior:"smooth", block:"start" }); };
+  box.appendChild(b);
+  return box;
+}
+function closeMachPopup(){ if(machPopup){ try{ machPopup.remove(); }catch(e){} } machPopup = null; popupMid = null; }
+function showMachinePopup(m){
+  if(!lmap || !mapReady || !maplibregl.Popup) return;
+  const p = machinePositions().get(String(m.id)); if(!p) return;
+  closeMachPopup();
+  popupMid = String(m.id);
+  machPopup = new maplibregl.Popup({ closeButton:true, maxWidth:"260px", offset:14, className:"machpopup" })
+    .setLngLat(p.pos).setDOMContent(machineInfo(m)).addTo(lmap);
+  if(machPopup.on) machPopup.on("close", ()=>{ if(popupMid === String(m.id)){ machPopup = null; popupMid = null; } });
+}
+function flashMachine(m){
+  hlMachine = String(m.id);
+  render();
+  const row = document.querySelector('#detail .mrow[data-mid="' + String(m.id).replace(/"/g, "") + '"]');
+  if(row && row.scrollIntoView) row.scrollIntoView({ behavior:"smooth", block:"center" });
+  setTimeout(()=>{ if(hlMachine === String(m.id)){ hlMachine = null; softRender(); } }, 4000);
+}
+// Aus der Tabelle: Karte fliegt zur Maschine und zeigt das Fenster. Im Modus Leicht: Baustelle öffnen, Maschine hervorheben.
+function gotoMachine(m){
+  selectSite(loc(m));
+  if(MODE === "3d" && lmap && mapReady){
+    const p = machinePositions().get(String(m.id));
+    if(p){
+      lmap.flyTo({ center:p.pos, zoom:19, pitch:60, duration:1500 });
+      const mapEl = $("map"); if(mapEl && mapEl.scrollIntoView) mapEl.scrollIntoView({ behavior:"smooth", block:"center" });
+      showMachinePopup(m);
+      hlMachine = String(m.id); render();
+      setTimeout(()=>{ if(hlMachine === String(m.id)){ hlMachine = null; softRender(); } }, 4000);
+      return;
+    }
+  }
+  flashMachine(m);
 }
 function drawingGeo(){
   return { type:"FeatureCollection", features:drawings.filter(d => d.kind !== "bereich" && DRAW_KINDS[d.kind] && d.geom).map(d=>{
     const site = findSite(d.site);
+    const half = d.seite === "links" || d.seite === "rechts";
     return { type:"Feature", geometry:d.geom, properties:{ id:d.id, site:d.site, kind:d.kind, color:DRAW_KINDS[d.kind].color || "#a7b1bc",
-      text:DRAW_KINDS[d.kind].t.replace(/ \/.*$/, "") + (d.label ? " · " + d.label : ""), dim:!!(site && !showSite(site)) } };
+      w:half ? 0.5 : 1, off:d.seite === "rechts" ? 1 : d.seite === "links" ? -1 : 0,
+      text:DRAW_KINDS[d.kind].t.replace(/ \/.*$/, "") + (sideOf(d) ? " · nur " + sideOf(d) : "") + (d.label ? " · " + d.label : ""), dim:!!(site && !showSite(site)) } };
   }) };
 }
 function previewGeo(){
   const f = [];
   if(drawState){
     const pts = drawState.pts, g = DRAW_KINDS[drawState.kind].g;
-    pts.forEach(p => f.push({ type:"Feature", properties:{}, geometry:{ type:"Point", coordinates:p } }));
-    if(g !== "point" && pts.length >= 2) f.push({ type:"Feature", properties:{}, geometry:{ type:"LineString", coordinates:g === "area" && pts.length >= 3 ? pts.concat([pts[0]]) : pts } });
+    if(!(DRAW_KINDS[drawState.kind].snap && !drawState.manual)) pts.forEach(p => f.push({ type:"Feature", properties:{}, geometry:{ type:"Point", coordinates:p } }));
+    const sd = drawState.seite;
+    if(g !== "point" && pts.length >= 2) f.push({ type:"Feature", properties:{ band:!!DRAW_KINDS[drawState.kind].snap, w:sd === "beide" ? 1 : 0.5, off:sd === "rechts" ? 1 : sd === "links" ? -1 : 0 },
+      geometry:{ type:"LineString", coordinates:g === "area" && pts.length >= 3 ? pts.concat([pts[0]]) : pts } });
+    (drawState.taps || []).forEach(p => f.push({ type:"Feature", properties:{ tap:true }, geometry:{ type:"Point", coordinates:p } }));
     if(g === "area" && pts.length >= 3) f.push({ type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[pts.concat([pts[0]])] } });
   }
   return { type:"FeatureCollection", features:f };
@@ -1953,7 +2126,7 @@ function addMapLayers(){
     lmap.addLayer({ id:"bauten", type:"fill-extrusion", source:vec, "source-layer":"building", minzoom:14,
       filter:["!=", ["get", "hide_3d"], true],
       paint:{
-        "fill-extrusion-color":"#3b4654",
+        "fill-extrusion-color":mapTheme === "dunkel" ? "#3b4654" : "#d4d8de",
         "fill-extrusion-height":["interpolate", ["linear"], ["zoom"], 14, 0, 14.6, ["coalesce", ["get", "render_height"], 8]],
         "fill-extrusion-base":["coalesce", ["get", "render_min_height"], 0],
         "fill-extrusion-opacity":0.85
@@ -1981,6 +2154,20 @@ function addMapLayers(){
     layout:{ "line-cap":"round", "line-join":"round" },
     paint:{ "line-color":["get", "color"], "line-opacity":dop(0.95),
             "line-width":["interpolate", ["exponential", 2], ["zoom"], 14, 1.5, 20, 90] } });     // etwa 6 m breit
+  // Strasse erneuern: rot-weiss gestreift wie ein Absperrband (nicht blinkend, nicht mit "defekt" zu verwechseln).
+  // Ganze Strasse etwa 6 m breit, eine Seite halb so breit und zur Seite versetzt.
+  const fullW = ["interpolate", ["exponential", 2], ["zoom"], 14, 1.6, 20, 95];
+  const halfW = ["interpolate", ["exponential", 2], ["zoom"], 14, 0.8, 20, 48];
+  const halfOff = ["interpolate", ["exponential", 2], ["zoom"], 14, ["*", ["get", "off"], 0.4], 20, ["*", ["get", "off"], 24]];
+  const ern = ["==", ["get", "kind"], "erneuern"];
+  lmap.addLayer({ id:"dr-ern-full", type:"line", source:"drawings", filter:["all", ern, ["==", ["get", "w"], 1]],
+    paint:{ "line-color":"#d93a3a", "line-width":fullW, "line-opacity":dop(0.95) } });
+  lmap.addLayer({ id:"dr-ern-full-w", type:"line", source:"drawings", filter:["all", ern, ["==", ["get", "w"], 1]],
+    paint:{ "line-color":"#ffffff", "line-width":fullW, "line-dasharray":[1, 1], "line-opacity":dop(0.9) } });
+  lmap.addLayer({ id:"dr-ern-half", type:"line", source:"drawings", filter:["all", ern, ["<", ["get", "w"], 1]],
+    paint:{ "line-color":"#d93a3a", "line-width":halfW, "line-offset":halfOff, "line-opacity":dop(0.95) } });
+  lmap.addLayer({ id:"dr-ern-half-w", type:"line", source:"drawings", filter:["all", ern, ["<", ["get", "w"], 1]],
+    paint:{ "line-color":"#ffffff", "line-width":halfW, "line-offset":halfOff, "line-dasharray":[1, 1], "line-opacity":dop(0.9) } });
   lmap.addLayer({ id:"dr-line", type:"line", source:"drawings", filter:["==", ["get", "kind"], "hecke"],
     layout:{ "line-cap":"round", "line-join":"round" },
     paint:{ "line-color":["get", "color"], "line-opacity":dop(1), "line-width":["interpolate", ["linear"], ["zoom"], 14, 2, 19, 7] } });
@@ -2004,8 +2191,19 @@ function addMapLayers(){
     filter:["==", ["geometry-type"], "Polygon"],
     layout:{ "text-field":["get", "text"], "text-font":font, "text-size":11 },
     paint:labPaint });
-  lmap.addSource("machines", { type:"geojson", data:machineGeo() });
-  lmap.addLayer({ id:"mach-icon", type:"symbol", source:"machines", minzoom:14.5,
+  const mpos = machinePositions();
+  lmap.addSource("machines", { type:"geojson", data:machineGeo(mpos) });
+  lmap.addSource("machines3d", { type:"geojson", data:mach3dGeo(mpos) });
+  // Nah: Maschinen als 3D-Modelle in echter Grösse, Ring am Boden in der Statusfarbe, Name darüber
+  lmap.addLayer({ id:"mach-ring", type:"line", source:"machines3d", minzoom:16.5, filter:["==", ["get", "ring"], true],
+    paint:{ "line-color":["get", "color"], "line-width":["interpolate", ["linear"], ["zoom"], 16.5, 2, 20, 6], "line-opacity":["case", ["get", "dim"], 0.3, 1] } });
+  lmap.addLayer({ id:"mach-3d", type:"fill-extrusion", source:"machines3d", minzoom:16.5, filter:["==", ["get", "part"], true],
+    paint:{ "fill-extrusion-color":["get", "color"], "fill-extrusion-base":["get", "base"], "fill-extrusion-height":["get", "top"], "fill-extrusion-opacity":1 } });
+  lmap.addLayer({ id:"mach-label", type:"symbol", source:"machines", minzoom:17.5,
+    layout:{ "text-field":["get", "label"], "text-font":font, "text-size":12, "text-anchor":"bottom", "text-offset":[0, -2.6], "text-optional":true },
+    paint:{ "text-color":"#ffffff", "text-halo-color":"#0f1419", "text-halo-width":1.8, "text-opacity":["case", ["get", "dim"], 0.35, 1] } });
+  // Weiter weg: Bild je Art und Status (die Modelle wären nur ein paar Pixel gross)
+  lmap.addLayer({ id:"mach-icon", type:"symbol", source:"machines", minzoom:14.5, maxzoom:17.5,
     layout:{ "icon-image":["get", "img"], "icon-allow-overlap":true, "icon-ignore-placement":true,
              "text-field":["get", "label"], "text-font":font, "text-size":11, "text-offset":[0, 1.6], "text-anchor":"top",
              "text-optional":true },
@@ -2015,10 +2213,15 @@ function addMapLayers(){
   lmap.addSource("draw-preview", { type:"geojson", data:previewGeo() });
   lmap.addLayer({ id:"dp-fill", type:"fill", source:"draw-preview", filter:["==", ["geometry-type"], "Polygon"],
     paint:{ "fill-color":cssVar("--sel"), "fill-opacity":0.2 } });
+  lmap.addLayer({ id:"dp-band", type:"line", source:"draw-preview", filter:["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "band"], true]],
+    paint:{ "line-color":"#d93a3a", "line-opacity":0.55,
+            "line-width":["interpolate", ["exponential", 2], ["zoom"], 14, ["*", ["get", "w"], 1.6], 20, ["*", ["get", "w"], 95]],
+            "line-offset":halfOff } });
   lmap.addLayer({ id:"dp-line", type:"line", source:"draw-preview", filter:["==", ["geometry-type"], "LineString"],
     paint:{ "line-color":cssVar("--sel"), "line-width":3, "line-dasharray":[1.5, 1] } });
   lmap.addLayer({ id:"dp-pts", type:"circle", source:"draw-preview", filter:["==", ["geometry-type"], "Point"],
-    paint:{ "circle-radius":6, "circle-color":"#ffffff", "circle-stroke-color":cssVar("--sel"), "circle-stroke-width":3 } });
+    paint:{ "circle-radius":["case", ["==", ["get", "tap"], true], 7, 6], "circle-color":["case", ["==", ["get", "tap"], true], cssVar("--sel"), "#ffffff"],
+            "circle-stroke-color":["case", ["==", ["get", "tap"], true], "#ffffff", cssVar("--sel")], "circle-stroke-width":3 } });
   lmap.addLayer({ id:"site-dot", type:"circle", source:"site-pts", maxzoom:13.5,
     paint:{ "circle-radius":["case", ["get", "sel"], 9, 7], "circle-color":["get", "color"],
             "circle-stroke-width":["case", ["get", "sel"], 3, 1.5],
@@ -2043,18 +2246,20 @@ function addMapLayers(){
     lmap.setPaintProperty("site-line", "line-opacity", ["case", ["get", "dim"], 0.25, ["==", ["get", "status"], "broken"], v, 1]);
     lmap.setPaintProperty("site-dot", "circle-opacity", ["case", ["get", "dim"], 0.25, ["==", ["get", "status"], "broken"], v, 1]);
     if(lmap.getLayer("mach-icon")) lmap.setPaintProperty("mach-icon", "icon-opacity", ["case", ["get", "dim"], 0.25, ["==", ["get", "status"], "broken"], v, 1]);
+    if(lmap.getLayer("mach-ring")) lmap.setPaintProperty("mach-ring", "line-opacity", ["case", ["get", "dim"], 0.3, ["==", ["get", "status"], "broken"], v, 1]);
   }, 700);
 }
 
-async function initRealMap(){
+async function initRealMap(cam){
   if(MODE !== "3d" || lmap) return;
   if(!(await loadMapLibre())) return;                    // ohne Internet bleibt die Skizze
   if(MODE !== "3d" || lmap) return;                      // inzwischen umgestellt
   try{
     $("map").classList.add("real");
     lmap = new maplibregl.Map({
-      container:"lmap", style:MAP_STYLE, center:[8.85, 47.235], zoom:11.5, pitch:55, bearing:-15,
-      maxPitch:70, maxZoom:18, attributionControl:{ compact:true }
+      container:"lmap", style:MAP_STYLE, center:cam ? cam.center : [8.85, 47.235], zoom:cam ? cam.zoom : 11.5,
+      pitch:cam ? cam.pitch : 55, bearing:cam ? cam.bearing : -15,
+      maxPitch:70, maxZoom:20, attributionControl:{ compact:true }
     });
     lmap.addControl(new maplibregl.NavigationControl({ visualizePitch:true }), "top-right");
     lmap.on("load", ()=>{
@@ -2063,12 +2268,13 @@ async function initRealMap(){
         attribution:"Höhendaten: Mapzen, AWS Terrain Tiles" });
       const first = lmap.getStyle().layers.find(l => l.type === "symbol");
       lmap.addLayer({ id:"relief", type:"hillshade", source:"dem",
-        paint:{ "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#05080b", "hillshade-highlight-color":"#2a3542" } }, first ? first.id : undefined);
-      darkenBasemap();
+        paint:mapTheme === "dunkel" ? { "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#05080b", "hillshade-highlight-color":"#2a3542" }
+                                     : { "hillshade-exaggeration":0.35, "hillshade-shadow-color":"#6b7380", "hillshade-highlight-color":"#ffffff" } }, first ? first.id : undefined);
+      styleBasemap();
       addMapLayers();
       mapReady = true;
-      set3D(true);
-      showOverview(0);
+      set3D(cam ? cam.pitch > 0 : true);
+      if(!cam) showOverview(0);
       render();
     });
     lmap.on("click", e=>{
@@ -2078,10 +2284,15 @@ async function initRealMap(){
         cb(e.lngLat.lat, e.lngLat.lng);
         return;
       }
-      if(drawState){ drawState.pts.push([e.lngLat.lng, e.lngLat.lat]); updateDrawing(); return; }
+      if(drawState){ drawTap([e.lngLat.lng, e.lngLat.lat]); return; }
       if(!mapReady || !e.point) return;
       const f = lmap.queryRenderedFeatures(e.point, { layers:SITE_LAYERS.filter(id => lmap.getLayer(id)) });
-      if(f.length) selectSite(f[0].properties.site || f[0].properties.id);
+      if(!f.length) return;
+      const pr = f[0].properties || {};
+      const mid = pr.mid || (f[0].layer && /^mach-/.test(f[0].layer.id) ? pr.id : null) || (pr.img ? pr.id : null);
+      const m = mid ? machines.find(x => String(x.id) === String(mid)) : null;
+      selectSite(pr.site || pr.id);
+      if(m){ showMachinePopup(m); hlMachine = String(m.id); render(); setTimeout(()=>{ if(hlMachine === String(m.id)){ hlMachine = null; softRender(); } }, 4000); }
     });
     // Wenn der Kartenstil nicht lädt (kein Internet, gesperrt), zurück zur Skizze
     lmap.on("error", e=>{
@@ -2116,7 +2327,13 @@ function syncMapSites(){
   if(!a || !p) return;
   const g = siteGeo();
   a.setData(g.areas); p.setData(g.pts);
-  const ms = lmap.getSource("machines"); if(ms) ms.setData(machineGeo());
+  const mpos = machinePositions();
+  const ms = lmap.getSource("machines"); if(ms) ms.setData(machineGeo(mpos));
+  const m3 = lmap.getSource("machines3d"); if(m3) m3.setData(mach3dGeo(mpos));
+  if(machPopup && popupMid){                                   // offenes Fenster live nachführen
+    const m = machines.find(x => String(x.id) === popupMid), p = mpos.get(popupMid);
+    if(!m || !p) closeMachPopup(); else { machPopup.setLngLat(p.pos); if(machPopup.setDOMContent) machPopup.setDOMContent(machineInfo(m)); }
+  }
   const dr = lmap.getSource("drawings"); if(dr) dr.setData(drawingGeo());
 }
 
@@ -2124,23 +2341,214 @@ function syncMapSites(){
 function startDrawing(s, kind, label){
   if(!lmap || !mapReady) return;
   closeModal();
-  drawState = { site:s.id, kind, label:label || "", pts:[] };
+  drawState = { site:s.id, kind, label:label || "", pts:[], taps:[], manual:false, seite:"beide", err:"" };
   $("drawBar").hidden = false; $("map").classList.add("picking");
   const c = siteCenter(s);
   lmap.flyTo({ center:c, zoom:Math.max(lmap.getZoom(), 17), duration:900 });
   $("map").scrollIntoView({ behavior:"smooth", block:"center" });
   updateDrawing();
 }
+function drawTap(p){
+  const d = drawState;
+  if(DRAW_KINDS[d.kind].snap && !d.manual){ d.taps.push(p); recomputeSnap(); }
+  else d.pts.push(p);
+  updateDrawing();
+}
+function drawUndo(){
+  const d = drawState; if(!d) return;
+  if(DRAW_KINDS[d.kind].snap && !d.manual){ d.taps.pop(); recomputeSnap(); }
+  else d.pts.pop();
+  updateDrawing();
+}
+// Linie aus den Tipps entlang der echten Strassen (Strassennetz aus den Kartendaten)
+function recomputeSnap(){
+  const d = drawState;
+  d.err = ""; d.pts = [];
+  if(!d.taps.length) return;
+  const xs = d.taps.map(p => p[0]), ys = d.taps.map(p => p[1]);
+  const net = roadNet([Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)]);
+  if(!net){ d.err = "Die Strassendaten der Karte sind nicht verfügbar. Zeichne von Hand."; d.pts = d.taps.slice(); return; }
+  const snaps = d.taps.map(p => snapToNet(net, p, 30));
+  const bad = snaps.findIndex(x => !x);
+  if(bad >= 0){
+    d.err = "Punkt " + (bad + 1) + " liegt nicht auf einer Strasse der Karte. Tippe direkt auf die Strasse oder zeichne von Hand.";
+    d.pts = snaps.filter(Boolean).map(x => x.q);
+    return;
+  }
+  let path = [snaps[0].q];
+  for(let i = 1; i < snaps.length; i++){
+    const leg = routeOnNet(net, snaps[i-1], snaps[i]);
+    if(!leg){ d.err = "Zwischen Punkt " + i + " und " + (i + 1) + " gibt es keine zusammenhängende Strasse in den Kartendaten. Zeichne von Hand."; d.pts = path; return; }
+    path = path.concat(leg.slice(1));
+  }
+  d.pts = path.filter((p, i) => i === 0 || p[0] !== path[i-1][0] || p[1] !== path[i-1][1]);
+}
 function updateDrawing(){
   if(!drawState) return;
-  const k = DRAW_KINDS[drawState.kind], n = drawState.pts.length;
+  const d = drawState, k = DRAW_KINDS[d.kind], n = d.pts.length, snap = k.snap && !d.manual;
   const need = k.g === "line" ? 2 : k.g === "area" ? 3 : 1;
   const what = k.g === "point" ? (n === 1 ? "1 " + k.t : n + " × " + k.t) : n + (n === 1 ? " Punkt" : " Punkte");
-  $("drawText").textContent = k.t + ": " + (k.g === "point" ? "jeder Tipp auf die Karte setzt einen. " : "Punkte der Reihe nach auf die Karte tippen. ")
-    + "Bisher " + what + (n < need ? " (mindestens " + need + ")." : ".");
-  $("drawDone").disabled = n < need;
-  $("drawUndo").disabled = n === 0;
+  let txt;
+  if(snap){
+    txt = k.t + ": Tippe auf den Anfang und dann auf das Ende des Abschnitts, weitere Tipps verlängern. Die Linie folgt der Strasse. ";
+    txt += d.err ? d.err : n >= 2 ? "Länge " + drawingMeasure({ geom:{ type:"LineString", coordinates:d.pts } }) + "." : (d.taps.length ? "Jetzt das Ende antippen." : "");
+  } else {
+    txt = k.t + ": " + (k.g === "point" ? "jeder Tipp auf die Karte setzt einen. " : "Punkte der Reihe nach auf die Karte tippen. ")
+      + "Bisher " + what + (n < need ? " (mindestens " + need + ")." : ".");
+  }
+  $("drawText").textContent = txt;
+  $("drawDone").disabled = n < need || (snap && !!d.err);
+  $("drawUndo").disabled = snap ? d.taps.length === 0 : n === 0;
+  $("drawManual").hidden = !snap;
+  // Seite wählen (nur bei Strasse erneuern, sobald es eine Linie gibt)
+  const sides = $("drawSides");
+  sides.innerHTML = "";
+  sides.hidden = !(k.snap && n >= 2);
+  if(!sides.hidden){
+    const nm = sideNames(d.pts);
+    [["beide", "Ganze Strasse"], ["links", "Nur " + nm.links], ["rechts", "Nur " + nm.rechts]].forEach(([v, t])=>{
+      const b = el("button", d.seite === v ? "on" : "", t); b.type = "button"; b.id = "side-" + v;
+      b.onclick = ()=>{ d.seite = v; updateDrawing(); };
+      sides.appendChild(b);
+    });
+  }
   const pv = lmap && lmap.getSource("draw-preview"); if(pv) pv.setData(previewGeo());
+}
+
+/* Strassennetz aus den geladenen Kartendaten (OpenStreetMap, Ebene "transportation"). Kreuzungen teilen sich
+   einen Punkt, so entsteht ein Netz. Der Weg zwischen zwei Tipps wird mit Dijkstra gesucht (kürzester Weg). */
+const ROAD_SKIP = { rail:1, transit:1, ferry:1, aerialway:1, pier:1 };
+function roadNet(bb){
+  const style = lmap.getStyle() || {};
+  const src = Object.keys(style.sources || {}).find(k => style.sources[k].type === "vector");
+  if(!src || !lmap.querySourceFeatures) return null;
+  let feats = [];
+  try{ feats = lmap.querySourceFeatures(src, { sourceLayer:"transportation" }) || []; }catch(e){ return null; }
+  if(!feats.length) return null;
+  const midLat = (bb[1] + bb[3]) / 2, midLng = (bb[0] + bb[2]) / 2;
+  const kx = 111320 * Math.cos(midLat * Math.PI / 180), ky = 110574;
+  const padX = 400 / kx, padY = 400 / ky;                     // 400 m um die Tipps
+  const box = [bb[0] - padX, bb[1] - padY, bb[2] + padX, bb[3] + padY];
+  const inBox = p => p[0] >= box[0] && p[0] <= box[2] && p[1] >= box[1] && p[1] <= box[3];
+  const dist = (p, q) => Math.hypot((p[0] - q[0]) * kx, (p[1] - q[1]) * ky);
+  const xy = p => [(p[0] - midLng) * kx, (p[1] - midLat) * ky];
+  const nodes = new Map(), seen = new Set(), raw = [];
+  const node = p => { const k = Math.round(p[0] * 1e5) + "," + Math.round(p[1] * 1e5); let n = nodes.get(k); if(!n){ n = { k, p:[p[0], p[1]], xy:xy(p), e:new Map() }; nodes.set(k, n); } return n; };
+  feats.forEach(f=>{
+    const pr = f.properties || {}, g = f.geometry || {};
+    if(ROAD_SKIP[pr.class]) return;
+    const lvl = (pr.brunnel === "bridge" || pr.brunnel === "tunnel" ? pr.brunnel : "") + "|" + (pr.layer || 0);   // Brücken und Tunnel nicht mit der Strasse darunter verbinden
+    const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : [];
+    lines.forEach(line=>{
+      for(let i = 1; i < line.length; i++){
+        if(!inBox(line[i-1]) && !inBox(line[i])) continue;
+        const A = node(line[i-1]), B = node(line[i]);
+        if(A === B) continue;
+        const key = A.k < B.k ? A.k + "|" + B.k : B.k + "|" + A.k;
+        if(seen.has(key)) continue;                                 // gleiche Strecke aus zwei Kacheln nur einmal
+        seen.add(key);
+        raw.push({ A, B, lvl, cuts:[] });
+      }
+    });
+  });
+  /* Kreuzungen reparieren: Die Kartendaten sind leicht vereinfacht, darum fehlt manchmal der gemeinsame Punkt
+     (gerade Strasse mit Einmündung oder Kreuzung). Kreuzende Abschnitte und Enden, die auf einer Strasse liegen,
+     werden dort verbunden, aber nur auf gleicher Ebene (keine Brücke mit der Strasse darunter). */
+  const CELL = 25, grid = new Map();
+  raw.forEach((sg, i)=>{
+    const x0 = Math.floor(Math.min(sg.A.xy[0], sg.B.xy[0]) / CELL), x1 = Math.floor(Math.max(sg.A.xy[0], sg.B.xy[0]) / CELL);
+    const y0 = Math.floor(Math.min(sg.A.xy[1], sg.B.xy[1]) / CELL), y1 = Math.floor(Math.max(sg.A.xy[1], sg.B.xy[1]) / CELL);
+    if((x1 - x0 + 1) * (y1 - y0 + 1) > 400) return;               // sehr lange Abschnitte ohne Raster (selten)
+    for(let gx = x0; gx <= x1; gx++) for(let gy = y0; gy <= y1; gy++){ const k = gx + "," + gy; let c = grid.get(k); if(!c){ c = []; grid.set(k, c); } c.push(i); }
+  });
+  const onSeg = (P, sg)=>{                                          // Lage von P auf dem Abschnitt (t) und Abstand in Metern
+    const ax = sg.A.xy[0], ay = sg.A.xy[1], dx = sg.B.xy[0] - ax, dy = sg.B.xy[1] - ay, L2 = dx * dx + dy * dy;
+    const t = L2 ? ((P.xy[0] - ax) * dx + (P.xy[1] - ay) * dy) / L2 : 0;
+    return { t, d:Math.hypot(ax + t * dx - P.xy[0], ay + t * dy - P.xy[1]) };
+  };
+  const done = new Set();
+  grid.forEach(list=>{
+    for(let a = 0; a < list.length; a++) for(let c = a + 1; c < list.length; c++){
+      const i = list[a], j = list[c], pk = i < j ? i + "," + j : j + "," + i;
+      if(done.has(pk)) continue; done.add(pk);
+      const S = raw[i], T = raw[j];
+      if(S.lvl !== T.lvl) continue;
+      if(S.A === T.A || S.A === T.B || S.B === T.A || S.B === T.B) continue;
+      // Ende eines Abschnitts liegt auf dem anderen (Einmündung)
+      let joined = false;
+      [[S, T], [T, S]].forEach(([P, Q])=>{
+        [P.A, P.B].forEach(E=>{
+          const r = onSeg(E, Q);
+          if(r.t > 0.0005 && r.t < 0.9995 && r.d < 1.5){ Q.cuts.push({ t:r.t, n:E }); joined = true; }
+        });
+      });
+      if(joined) continue;
+      // echte Kreuzung zweier Abschnitte
+      const p = S.A.xy, r1 = [S.B.xy[0] - p[0], S.B.xy[1] - p[1]], q = T.A.xy, r2 = [T.B.xy[0] - q[0], T.B.xy[1] - q[1]];
+      const den = r1[0] * r2[1] - r1[1] * r2[0];
+      if(Math.abs(den) < 1e-9) continue;
+      const t = ((q[0] - p[0]) * r2[1] - (q[1] - p[1]) * r2[0]) / den, u = ((q[0] - p[0]) * r1[1] - (q[1] - p[1]) * r1[0]) / den;
+      if(t <= 0.0005 || t >= 0.9995 || u <= 0.0005 || u >= 0.9995) continue;
+      const X = node([S.A.p[0] + (S.B.p[0] - S.A.p[0]) * t, S.A.p[1] + (S.B.p[1] - S.A.p[1]) * t]);
+      S.cuts.push({ t, n:X }); T.cuts.push({ t:u, n:X });
+    }
+  });
+  // Abschnitte an den Verbindungspunkten teilen und das Netz bauen
+  const segs = [];
+  raw.forEach(sg=>{
+    const chain = [sg.A].concat(sg.cuts.sort((x, y) => x.t - y.t).map(c => c.n)).concat([sg.B]);
+    for(let i = 1; i < chain.length; i++){
+      const A = chain[i-1], B = chain[i];
+      if(A === B) continue;
+      const w = dist(A.p, B.p);
+      A.e.set(B.k, w); B.e.set(A.k, w);
+      segs.push([A, B]);
+    }
+  });
+  return { nodes, segs, dist, kx, ky };                         // leer = hier gibt es keine Strasse (Hinweis beim Tippen)
+}
+// Nächster Punkt auf einer Strasse, höchstens maxM Meter entfernt
+function snapToNet(net, p, maxM){
+  let best = null;
+  net.segs.forEach(([A, B])=>{
+    const ax = (A.p[0] - p[0]) * net.kx, ay = (A.p[1] - p[1]) * net.ky, bx = (B.p[0] - p[0]) * net.kx, by = (B.p[1] - p[1]) * net.ky;
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L2)) : 0;
+    const dd = Math.hypot(ax + t * dx, ay + t * dy);
+    if(!best || dd < best.d) best = { d:dd, A, B, t };
+  });
+  if(!best || best.d > maxM) return null;
+  best.q = [best.A.p[0] + (best.B.p[0] - best.A.p[0]) * best.t, best.A.p[1] + (best.B.p[1] - best.A.p[1]) * best.t];
+  return best;
+}
+function routeOnNet(net, s, e){
+  if((s.A === e.A && s.B === e.B) || (s.A === e.B && s.B === e.A)) return [s.q, e.q];   // gleicher Abschnitt
+  const S = "S", E = "E", INF = Infinity;
+  const adj = k=>{
+    if(k === S) return [[s.A.k, net.dist(s.q, s.A.p)], [s.B.k, net.dist(s.q, s.B.p)]];
+    const out = [];
+    net.nodes.get(k).e.forEach((w, to) => out.push([to, w]));
+    if(k === e.A.k) out.push([E, net.dist(e.A.p, e.q)]);
+    if(k === e.B.k) out.push([E, net.dist(e.B.p, e.q)]);
+    return out;
+  };
+  const best = new Map([[S, 0]]), prev = new Map(), heap = [[0, S]];
+  const push = (dd, k)=>{ heap.push([dd, k]); let i = heap.length - 1; while(i > 0){ const pI = (i - 1) >> 1; if(heap[pI][0] <= heap[i][0]) break; const t = heap[pI]; heap[pI] = heap[i]; heap[i] = t; i = pI; } };
+  const pop = ()=>{ const top = heap[0], last = heap.pop(); if(heap.length){ heap[0] = last; let i = 0;
+    for(;;){ const l = 2 * i + 1, r = l + 1; let m = i; if(l < heap.length && heap[l][0] < heap[m][0]) m = l; if(r < heap.length && heap[r][0] < heap[m][0]) m = r; if(m === i) break; const t = heap[m]; heap[m] = heap[i]; heap[i] = t; i = m; } }
+    return top; };
+  let found = false, guard = 0;
+  while(heap.length && guard++ < 300000){
+    const [dd, k] = pop();
+    if(dd > (best.has(k) ? best.get(k) : INF)) continue;
+    if(k === E){ found = true; break; }
+    if(dd > 8000) break;                                          // höchstens 8 km Weg
+    adj(k).forEach(([to, w])=>{ const nd = dd + w; if(nd < (best.has(to) ? best.get(to) : INF)){ best.set(to, nd); prev.set(to, k); push(nd, to); } });
+  }
+  if(!found) return null;
+  const path = []; let k = E;
+  while(k !== undefined){ path.push(k === S ? s.q : k === E ? e.q : net.nodes.get(k).p); k = prev.get(k); }
+  return path.reverse();
 }
 function endDrawing(){
   drawState = null;
@@ -2152,11 +2560,15 @@ async function finishDrawing(){
   const d = drawState, k = DRAW_KINDS[d.kind], s = findSite(d.site);
   let geoms = [];
   if(k.g === "point") geoms = d.pts.map(p => ({ type:"Point", coordinates:p }));
-  else if(k.g === "line" && d.pts.length >= 2) geoms = [{ type:"LineString", coordinates:d.pts.slice(0, 500) }];
+  else if(k.g === "line" && d.pts.length >= 2){
+    let line = d.pts;
+    if(line.length > 500){ const step = Math.ceil(line.length / 499); line = line.filter((p, i) => i % step === 0).concat([line[line.length - 1]]); }   // sehr lange Strecken ausdünnen
+    geoms = [{ type:"LineString", coordinates:line }];
+  }
   else if(k.g === "area" && d.pts.length >= 3) geoms = [{ type:"Polygon", coordinates:[d.pts.slice(0, 500).concat([d.pts[0]])] }];
   if(!geoms.length || !s) return;
   $("drawDone").disabled = true;
-  const ok = await addDrawings(s, d.kind, geoms, d.label);
+  const ok = await addDrawings(s, d.kind, geoms, d.label, d.seite);
   if(ok) endDrawing(); else updateDrawing();
 }
 
@@ -2577,7 +2989,7 @@ function modalTables(tab){
     const col = cols.find(c => c.k === sb2.k) || cols[0];
     list = list.slice().sort((a, b) => (sb2.asc ? 1 : -1) * (col.cmp(a, b) || 0) || RANK[a.status] - RANK[b.status] || byName(a, b));
     const fl = filter.size ? "Sparten-Filter: " + [...filter].map(k => SPARTEN[k]).join(", ") + ". " : "";
-    note.textContent = fl + (list.length > TBL_MAX ? TBL_MAX + " von " + list.length + " gezeigt, bitte die Suche nutzen." : list.length + (list.length === 1 ? " Eintrag" : " Einträge") + (term ? " gefunden" : "") + ". Zeile antippen öffnet die Baustelle.");
+    note.textContent = fl + (list.length > TBL_MAX ? TBL_MAX + " von " + list.length + " gezeigt, bitte die Suche nutzen." : list.length + (list.length === 1 ? " Eintrag" : " Einträge") + (term ? " gefunden" : "") + (cur === "machines" ? ". Zeile antippen zeigt die Maschine auf der Karte." : ". Zeile antippen öffnet die Baustelle."));
     const sx = wrap.scrollLeft, sy = wrap.scrollTop;
     wrap.innerHTML = "";
     if(!list.length){ wrap.appendChild(el("div", "empty", term ? "Nichts gefunden." : (cur === "sites" ? "Keine Baustellen." : "Keine Maschinen."))); return; }
@@ -2595,9 +3007,9 @@ function modalTables(tab){
       const tr = el("tr", r.status);
       cols.forEach(c=>{ const td = tableCell(cur, c.k, r); td.setAttribute("data-label", c.t); tr.appendChild(td); });
       tr.onclick = ()=>{
-        const target = cur === "sites" ? r.id : r.siteId;
         closeModal(); tablesRefresh = null;
-        selectSite(target);
+        if(cur === "machines"){ gotoMachine(r.m); return; }      // Maschine: direkt zu ihrem Platz auf der Karte
+        selectSite(r.id);
         const d = $("detail"); if(d && d.scrollIntoView) d.scrollIntoView({ behavior:"smooth", block:"start" });
       };
       tb.appendChild(tr);
@@ -3017,7 +3429,8 @@ async function loadAll(){
     sb.from("needs").select("*").order("created_at", { ascending:false }).limit(1000),
     sb.from("materials").select("*").order("name").limit(1000),
     sb.from("sites").select("weitere_sparten").limit(1),
-    sb.from("drawings").select("*").order("created_at").limit(5000)
+    sb.from("drawings").select("*").order("created_at").limit(5000),
+    sb.from("drawings").select("seite").limit(1)
   ]);
   const err = res[0].error || res[1].error || res[2].error;
   if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
@@ -3027,7 +3440,8 @@ async function loadAll(){
   needsOk = !res[3].error;
   needs = needsOk ? res[3].data.map(mapNeed) : [];
   spartenOk = !res[5].error;
-  drawingsOk = !res[6].error;                              // ohne Tabelle drawings: Liste mit Hinweis, alles andere läuft
+  drawingsOk = !res[6].error;
+  seiteOk = drawingsOk && !res[7].error;                              // ohne Tabelle drawings: Liste mit Hinweis, alles andere läuft
   drawings = drawingsOk ? res[6].data.map(mapDrawing) : [];                               // ohne Spalte weitere_sparten: nur die Hauptsparte
   matsOk = !res[4].error;                                  // ohne Tabelle materials gehen Katalog und freie Eingabe trotzdem
   customMats = matsOk ? res[4].data.map(mapMaterial) : [];
@@ -3169,6 +3583,8 @@ $("filters").onclick = e=>{
 renderFilters();
 $("siteSearch").addEventListener("input", renderList);
 $("btn3d").onclick = ()=>set3D(!is3D);
+$("themeBtn").textContent = mapTheme === "dunkel" ? "Karte: Dunkel" : "Karte: Hell";
+$("themeBtn").onclick = ()=>setMapTheme(mapTheme === "dunkel" ? "hell" : "dunkel");
 function initMode(){
   $("modeBtn").onclick = ()=>{
     const next = MODE === "leicht" ? "3d" : "leicht";
@@ -3182,7 +3598,8 @@ $("addSiteBtn").onclick = ()=>modalSite();
 $("addMachineBtn").onclick = ()=>modalMachine();
 $("historyBtn").onclick = modalHistory;
 $("tablesBtn").onclick = ()=>modalTables("sites");
-$("drawUndo").onclick = ()=>{ if(drawState){ drawState.pts.pop(); updateDrawing(); } };
+$("drawUndo").onclick = drawUndo;
+$("drawManual").onclick = ()=>{ if(drawState){ drawState.manual = true; drawState.pts = drawState.taps.slice(); drawState.taps = []; drawState.err = ""; updateDrawing(); } };
 $("drawDone").onclick = finishDrawing;
 $("drawCancel").onclick = endDrawing;
 document.addEventListener("keydown", e=>{ if(e.key === "Escape" && drawState) endDrawing(); });
