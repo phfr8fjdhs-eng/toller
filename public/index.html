@@ -1966,7 +1966,7 @@ let lmap = null, mapReady = false, is3D = true;
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const SITE_R = 35;                     // Radius der Baustellenfläche in Metern, solange keine Strecke gezeichnet ist
-const SITE_LAYERS = ["mach-3d", "mach-ring", "mach-label", "mach-icon", "dr-tree", "dr-leitung", "dr-line", "dr-strasse", "dr-ern-full", "dr-ern-half", "dr-belag", "dr-rasen", "site-fill", "site-line", "site-dot", "site-label"];
+const SITE_LAYERS = ["mach-3d", "mach-ring", "mach-label", "mach-icon", "mach-icon-text", "dr-tree", "dr-leitung", "dr-line", "dr-strasse", "dr-ern-full", "dr-ern-half", "dr-belag", "dr-rasen", "site-fill", "site-line", "site-dot", "site-label", "site-label-edge"];
 const MACH_KINDS = ["bagger","mini","dumper","lkw","walze","fertiger","lader","tele","platte","maeher","allg"];
 let drawState = null;                  // { site, kind, label, pts:[[lng,lat], …] } solange gezeichnet wird
 let blinkTimer = null, blinkOn = true;
@@ -2054,13 +2054,13 @@ function fallbackToSketch(){
 // Fläche um einen Punkt (Kreis aus 32 Ecken), solange keine Strecke gezeichnet ist
 function circleRing(lng, lat, r){
   const dLat = r / 111320, dLng = r / (111320 * Math.cos(lat * Math.PI / 180)), pts = [];
-  for(let i = 0; i <= 32; i++){ const a = i / 32 * 2 * Math.PI; pts.push([lng + dLng*Math.cos(a), lat + dLat*Math.sin(a)]); }
+  for(let i = 0; i <= 64; i++){ const a = i / 64 * 2 * Math.PI; pts.push([lng + dLng*Math.cos(a), lat + dLat*Math.sin(a)]); }
   return pts;
 }
 
 // Baustellen als Kartendaten: Fläche (nah), Punkt mit Schrift (weit). Farbe = schlechtester Status, Sparte nur als Buchstabe
 function siteGeo(){
-  const areas = [], pts = [];
+  const areas = [], pts = [], edge = [];
   sites.concat([DEPOT]).forEach(s=>{
     const depot = s.id === "depot";
     const st = depot ? "off" : siteStatus(s);
@@ -2078,8 +2078,15 @@ function siteGeo(){
     if(ber.length) ber.forEach(d => areas.push({ type:"Feature", properties:props, geometry:d.geom }));   // gezeichneter Bereich ersetzt den Kreis
     else areas.push({ type:"Feature", properties:props, geometry:{ type:"Polygon", coordinates:[circleRing(s.lng, s.lat, SITE_R)] } });
     pts.push({ type:"Feature", properties:props, geometry:{ type:"Point", coordinates:[s.lng, s.lat] } });
+    let top = s.lat + (SITE_R + 3) / 110574, mid = s.lng;
+    if(ber.length){
+      const all = [].concat.apply([], ber.map(d => d.geom.coordinates[0]));
+      top = Math.max.apply(null, all.map(p => p[1])) + 3 / 110574;
+      mid = (Math.min.apply(null, all.map(p => p[0])) + Math.max.apply(null, all.map(p => p[0]))) / 2;
+    }
+    edge.push({ type:"Feature", properties:props, geometry:{ type:"Point", coordinates:[mid, top] } });
   });
-  return { areas:{ type:"FeatureCollection", features:areas }, pts:{ type:"FeatureCollection", features:pts } };
+  return { areas:{ type:"FeatureCollection", features:areas }, pts:{ type:"FeatureCollection", features:pts }, edge:{ type:"FeatureCollection", features:edge } };
 }
 
 // Maschinen stehen auf ihrer Baustelle, verteilt in einer Spirale um die Mitte (oder um den gezeichneten Bereich).
@@ -2106,35 +2113,69 @@ function machinePositions(){
   return out;
 }
 const machLabel = m => m.name + (m.status === "broken" ? "\nDefekt" : m.status === "waiting" ? "\n" + (m.reason.indexOf("Diesel") === 0 ? "Diesel fehlt" : "Material fehlt") : "");
+const STATUS_RANK = { broken:3, waiting:2, running:1, off:0 };
+/* Wie hoch die Schrift über dem Modell stehen muss (Meter): Höhe plus halbe Tiefe, so wie man sie schräg von oben sieht */
+const liftCache = {};
+function machLift(kind){
+  if(liftCache[kind] == null){
+    let top = 0, rad = 0;
+    (MACH3D[kind] || MACH3D.allg).forEach(([x0, x1, y0, y1, , t])=>{
+      top = Math.max(top, t);
+      rad = Math.max(rad, Math.hypot(x0, y0), Math.hypot(x1, y1), Math.hypot(x0, y1), Math.hypot(x1, y0));
+    });
+    liftCache[kind] = Math.round((top * 0.9 + rad * 0.55 + 0.6) * 10) / 10;
+  }
+  return liftCache[kind];
+}
 function machineGeo(pos){
   pos = pos || machinePositions();
   return { type:"FeatureCollection", features:machines.filter(m => pos.has(String(m.id))).map(m=>{
-    const p = pos.get(String(m.id));
+    const p = pos.get(String(m.id)), k = machKind(m.typ);
     return { type:"Feature", geometry:{ type:"Point", coordinates:p.pos },
-      properties:{ id:String(m.id), site:p.site, status:m.status, img:"mi-" + machKind(m.typ) + "-" + m.status, dim:!showSparte(m.sparte), label:machLabel(m) } };
+      properties:{ id:String(m.id), site:p.site, status:m.status, rank:STATUS_RANK[m.status] || 0, lift:machLift(k),
+                   img:"mi-" + k + "-" + m.status, dim:!showSparte(m.sparte), label:machLabel(m) } };
   }) };
 }
 /* 3D-Modelle der Maschinen aus Blöcken in echter Grösse (Meter): [vorne von, bis, links von, bis, unten, oben, Farbe].
    Farben neutral (nie Statusfarben), der Status steht im Ring am Boden und in der Schrift. */
-const M3 = { body:"#aeb7c1", dark:"#3a3f47", cab:"#6189b0", arm:"#c7cfd8", tool:"#5d636b", box:"#8c959f" };
+const M3 = { body:"#e3e7eb", body2:"#b4bdc6", dark:"#30363d", cab:"#2d4a63", arm:"#cfd6dd", tool:"#4b525a", box:"#c3cad2", seat:"#23272c", steel:"#8a949e" };
+// Pfosten eines Schutzdachs (vier dünne Säulen) als Blöcke
+const posts = (x0, x1, y0, y1, b, t) => [[x0, x0 + 0.08, y0, y0 + 0.08, b, t, "dark"], [x1 - 0.08, x1, y0, y0 + 0.08, b, t, "dark"],
+  [x0, x0 + 0.08, y1 - 0.08, y1, b, t, "dark"], [x1 - 0.08, x1, y1 - 0.08, y1, b, t, "dark"]];
 const MACH3D = {
-  bagger:[[-2.2,2.2,0.8,1.4,0,0.9,"dark"],[-2.2,2.2,-1.4,-0.8,0,0.9,"dark"],[-1.9,1,-1.3,1.3,0.9,2.3,"body"],[0,1.2,0.25,1.25,0.9,3.1,"cab"],
-          [1,4.2,-0.3,0.3,2,2.7,"arm"],[4,4.6,-0.25,0.25,0.7,2.9,"arm"],[4,5,-0.6,0.6,0,0.7,"tool"]],
-  mini:[[-1.1,1.1,0.4,0.75,0,0.5,"dark"],[-1.1,1.1,-0.75,-0.4,0,0.5,"dark"],[-1,0.5,-0.7,0.7,0.5,1.4,"body"],[-0.3,0.5,-0.1,0.6,0.5,2.4,"cab"],
-        [0.5,2.3,-0.15,0.15,1.1,1.5,"arm"],[2.2,2.5,-0.13,0.13,0.4,1.6,"arm"],[2.1,2.7,-0.35,0.35,0,0.45,"tool"]],
-  dumper:[[-1.6,1.6,-0.8,0.8,0.3,1,"body"],[0.6,1.4,-0.95,-0.75,0,0.8,"dark"],[0.6,1.4,0.75,0.95,0,0.8,"dark"],[-1.4,-0.6,-0.95,-0.75,0,0.8,"dark"],
-          [-1.4,-0.6,0.75,0.95,0,0.8,"dark"],[0.3,1.9,-0.85,0.85,1,1.8,"tool"],[-1.5,-0.9,-0.6,0.6,1,2.4,"cab"]],
-  lkw:[[-4,4,-1.2,1.2,0.5,1.2,"dark"],[2.4,4,-1.25,1.25,1.2,3.2,"body"],[3.6,4.05,-1.1,1.1,2.2,3,"cab"],[-4,2.2,-1.2,1.2,1.2,2.9,"box"]],
-  walze:[[1,1.9,-1.05,1.05,0,1.2,"dark"],[-1.9,-1,-1.05,1.05,0,1.2,"dark"],[-1,1,-0.9,0.9,0.4,1.8,"body"],[-0.6,0.4,-0.7,0.7,1.8,3,"cab"]],
-  fertiger:[[1.6,3,-1.5,1.5,0.4,1.4,"tool"],[-1.8,1.6,0.8,1.3,0,0.7,"dark"],[-1.8,1.6,-1.3,-0.8,0,0.7,"dark"],[-1.8,1.6,-1.3,1.3,0.7,2.2,"body"],
-            [-2.8,-1.8,-1.7,1.7,0,0.6,"tool"],[-1.8,0.2,-1.3,1.3,3,3.2,"cab"]],
-  lader:[[1,2.2,-1.25,-0.85,0,1.3,"dark"],[1,2.2,0.85,1.25,0,1.3,"dark"],[-2.4,-1.2,-1.25,-0.85,0,1.3,"dark"],[-2.4,-1.2,0.85,1.25,0,1.3,"dark"],
-         [0.4,2.4,-0.85,0.85,0.6,1.6,"body"],[-2.6,0.2,-1.15,1.15,0.6,1.9,"body"],[-0.9,0.5,-0.8,0.8,1.9,3.3,"cab"],[2.2,3.6,-0.9,0.9,1,1.4,"arm"],[3.4,4.4,-1.3,1.3,0,1.1,"tool"]],
-  tele:[[-2.2,2.2,-1.15,1.15,0.4,1.4,"body"],[-0.6,0.9,0.4,1.15,1.4,2.6,"cab"],[-2.4,3.4,-0.35,0.35,1.6,2.2,"arm"],[3.4,4.6,-0.6,0.6,0.2,0.4,"tool"],
-        [1,2,-1.25,-1.15,0,1.1,"dark"],[1,2,1.15,1.25,0,1.1,"dark"],[-2,-1,-1.25,-1.15,0,1.1,"dark"],[-2,-1,1.15,1.25,0,1.1,"dark"]],
-  platte:[[-0.45,0.45,-0.3,0.3,0,0.25,"tool"],[-0.25,0.25,-0.2,0.2,0.25,0.7,"body"]],
-  maeher:[[0.4,1.4,-0.65,0.65,0,0.3,"tool"],[-0.9,0.5,-0.5,0.5,0.2,0.9,"body"],[-0.6,-0.2,-0.3,0.3,0.9,1.3,"cab"]],
-  allg:[[-1.5,1.5,-1,1,0.3,2,"body"],[-1.5,-0.3,-0.8,0.8,2,3,"cab"]]
+  bagger:[[-2.25,2.25,0.9,1.5,0,0.9,"dark"],[-2.25,2.25,-1.5,-0.9,0,0.9,"dark"],[-1.3,1.3,-0.9,0.9,0.5,1.0,"dark"],
+          [-2.2,1.0,-1.25,1.25,1.0,1.25,"body2"],[-2.0,-0.3,-1.25,0,1.25,2.2,"body"],[-2.35,-1.9,-1.25,1.25,1.0,2.15,"body2"],
+          [0,1.15,0.25,1.2,1.25,3.0,"cab"],[-0.05,1.2,0.2,1.25,3.0,3.15,"body"],
+          [1.0,1.8,-0.4,0.1,1.4,2.0,"body"],[1.8,2.6,-0.4,0.1,2.0,2.7,"body"],[2.6,3.6,-0.4,0.1,2.55,3.05,"body"],[3.6,4.3,-0.4,0.1,2.4,2.9,"body"],
+          [4.3,4.7,-0.33,0.03,0.75,2.9,"arm"],[4.25,5.25,-0.65,0.35,0,0.8,"tool"]],
+  mini:[[-0.85,0.85,0.4,0.7,0,0.42,"dark"],[-0.85,0.85,-0.7,-0.4,0,0.42,"dark"],[0.85,1.0,-0.75,0.75,0,0.42,"body2"],
+        [-0.9,0.55,-0.65,0.65,0.45,1.05,"body"],[-0.2,0.35,-0.05,0.45,1.05,1.4,"seat"]].concat(posts(-0.35, 0.5, -0.3, 0.55, 1.05, 2.25),
+        [[-0.4,0.55,-0.35,0.6,2.25,2.35,"body"],[0.55,1.0,-0.3,-0.05,0.9,1.4,"body"],[1.0,1.5,-0.3,-0.05,1.3,1.6,"body"],[1.5,1.7,-0.28,-0.08,0.35,1.6,"arm"],[1.5,2.0,-0.42,0.08,0,0.4,"tool"]]),
+  dumper:[[0.55,1.45,0.72,1.17,0,1.15,"dark"],[0.55,1.45,-1.17,-0.72,0,1.15,"dark"],[-1.6,-0.7,0.72,1.17,0,1.15,"dark"],[-1.6,-0.7,-1.17,-0.72,0,1.15,"dark"],
+          [-1.7,1.6,-0.65,0.65,0.45,0.95,"dark"],[0.2,2.0,-0.95,0.95,0.95,1.85,"body"],[0.3,1.9,-0.85,0.85,1.85,1.9,"tool"],
+          [-1.85,-0.6,-0.62,0.62,0.95,1.6,"body"],[-0.6,-0.2,-0.3,0.3,0.95,1.35,"seat"]].concat(posts(-0.97, -0.83, -0.62, 0.62, 0.95, 2.3),
+          [[-0.97,-0.83,-0.62,0.62,2.3,2.42,"dark"]]),
+  lkw:[[-4.0,3.9,-0.5,0.5,0.5,1.1,"dark"],[2.5,3.5,0.8,1.25,0,1.1,"dark"],[2.5,3.5,-1.25,-0.8,0,1.1,"dark"],[-3.5,-1.1,0.8,1.25,0,1.1,"dark"],[-3.5,-1.1,-1.25,-0.8,0,1.1,"dark"],
+       [2.1,4.0,-1.23,1.23,1.1,3.05,"body"],[3.92,4.04,-1.1,1.1,2.1,2.9,"cab"],[-4.0,2.0,-1.23,1.23,1.25,2.6,"box"],[-3.9,1.9,-1.13,1.13,2.6,2.65,"tool"]],
+  walze:[[1.0,1.9,-0.85,0.85,0,1.2,"steel"],[-1.9,-1.0,-0.85,0.85,0,1.2,"steel"],[1.0,1.9,-0.92,0.92,1.2,1.45,"body2"],[-1.9,-1.0,-0.92,0.92,1.2,1.45,"body2"],
+         [-1.0,1.0,-0.75,0.75,0.4,1.55,"body"],[-0.5,0.4,-0.6,0.6,1.55,1.75,"dark"],[-0.35,0.1,-0.25,0.25,1.75,2.15,"seat"]].concat(posts(-0.65, 0.65, -0.72, 0.72, 1.55, 2.85),
+         [[-0.68,0.68,-0.75,0.75,2.85,2.95,"body"]]),
+  fertiger:[[-1.3,1.7,0.8,1.25,0,0.7,"dark"],[-1.3,1.7,-1.25,-0.8,0,0.7,"dark"],[-1.5,1.6,-1.2,1.2,0.7,1.9,"body"],
+            [1.6,3.0,-1.5,1.5,0.6,1.45,"body2"],[1.7,2.9,-1.35,1.35,1.4,1.46,"tool"],[-2.9,-1.9,-1.75,1.75,0,0.6,"tool"],
+            [-1.9,-0.4,-1.2,1.2,1.9,2.05,"dark"]].concat(posts(-2.0, -0.2, -1.3, 1.3, 2.05, 3.0), [[-2.05,-0.15,-1.35,1.35,3.0,3.12,"body"]]),
+  lader:[[0.6,1.6,0.7,1.3,0,1.5,"dark"],[0.6,1.6,-1.3,-0.7,0,1.5,"dark"],[-2.2,-1.2,0.7,1.3,0,1.5,"dark"],[-2.2,-1.2,-1.3,-0.7,0,1.5,"dark"],
+         [-2.75,-0.5,-0.85,0.85,0.6,1.95,"body"],[-2.95,-2.6,-1.0,1.0,0.5,1.5,"body2"],[-0.3,1.6,-0.55,0.55,0.5,1.1,"dark"],
+         [-1.0,0.3,-0.7,0.7,1.6,3.15,"cab"],[-1.05,0.35,-0.75,0.75,3.15,3.28,"body"],
+         [0.3,2.4,-0.72,-0.5,1.0,1.4,"arm"],[0.3,2.4,0.5,0.72,1.0,1.4,"arm"],[2.3,3.3,-1.25,1.25,0,1.0,"tool"]],
+  tele:[[0.8,1.9,0.7,1.2,0,1.2,"dark"],[0.8,1.9,-1.2,-0.7,0,1.2,"dark"],[-1.9,-0.8,0.7,1.2,0,1.2,"dark"],[-1.9,-0.8,-1.2,-0.7,0,1.2,"dark"],
+        [-2.0,2.0,-0.88,0.88,0.6,1.35,"body"],[-0.6,1.0,0.1,0.88,1.35,2.75,"cab"],[-0.65,1.05,0.05,0.93,2.75,2.88,"body"],
+        [-1.8,-0.2,-0.6,-0.15,1.6,2.2,"body"],[-0.2,1.5,-0.6,-0.15,2.0,2.6,"body"],[1.5,3.2,-0.55,-0.2,2.4,3.0,"arm"],[3.2,4.3,-0.55,-0.2,2.8,3.3,"arm"],
+        [4.3,4.45,-0.6,0.6,2.4,3.3,"dark"],[4.45,5.4,-0.5,0.5,2.4,2.5,"tool"]],
+  platte:[[-0.45,0.45,-0.3,0.3,0,0.25,"tool"],[-0.25,0.25,-0.2,0.2,0.25,0.7,"body"],[-1.0,-0.3,-0.2,0.2,0.85,0.95,"dark"]],
+  maeher:[[0.4,1.4,-0.65,0.65,0,0.3,"tool"],[-0.9,0.5,-0.45,0.45,0.25,0.9,"body"],[-0.6,-0.2,-0.25,0.25,0.9,1.35,"seat"],
+          [-0.95,-0.45,0.45,0.7,0,0.65,"dark"],[-0.95,-0.45,-0.7,-0.45,0,0.65,"dark"]],
+  allg:[[-1.8,1.8,-0.95,0.95,0.6,1.7,"body"],[-1.3,0.1,-0.8,0.8,1.7,2.95,"cab"],[-1.35,0.15,-0.85,0.85,2.95,3.08,"body"],
+        [0.8,1.8,0.75,1.2,0,1.3,"dark"],[0.8,1.8,-1.2,-0.75,0,1.3,"dark"],[-1.8,-0.8,0.75,1.2,0,1.3,"dark"],[-1.8,-0.8,-1.2,-0.75,0,1.3,"dark"]]
 };
 function mach3dGeo(pos){
   pos = pos || machinePositions();
@@ -2268,14 +2309,23 @@ function addHatch(){
   try{ if(!lmap.hasImage("hatch-rasen")) lmap.addImage("hatch-rasen", { width:n, height:n, data }, { pixelRatio:2 }); }catch(e){}
 }
 
+// Schrift auf der Karte: auf heller Karte dunkel mit weissem Rand, sonst weiss mit dunklem Rand
+const labelInk = () => mapTheme === "hell" ? { "text-color":"#1f2328", "text-halo-color":"#ffffff" } : { "text-color":"#ffffff", "text-halo-color":"#0f1419" };
 function addMapLayers(){
   const style = lmap.getStyle() || {};
+  /* Reihenfolge wichtig für das Gelände (3D): Flächen und Linien liegen alle zusammen direkt unter der ersten Schrift
+     der Grundkarte. Mit Gelände werden sie als ein Block auf das Gelände gelegt. Liegen sie verstreut zwischen Schriften
+     und 3D-Ebenen, braucht MapLibre viele Zwischenbilder und lässt bei nahem Zoom Ebenen einfach weg. */
+  const firstSym = (style.layers || []).find(l => l.type === "symbol");
+  const under = firstSym ? firstSym.id : undefined;
+  const DRAPE = { fill:1, line:1, raster:1, hillshade:1, background:1 };
+  const add = def => DRAPE[def.type] && under ? lmap.addLayer(def, under) : lmap.addLayer(def);
   const vec = Object.keys(style.sources || {}).find(k => style.sources[k].type === "vector");
   const sym = (style.layers || []).find(l => l.type === "symbol" && l.layout && l.layout["text-font"]);
   const font = sym ? sym.layout["text-font"] : ["Noto Sans Regular"];
   // 3D-Häuser aus den Kartendaten (OpenStreetMap-Höhen), erst ab Strassen-Zoom, damit es flüssig bleibt
   if(vec && mapTheme !== "luftbild"){
-    lmap.addLayer({ id:"bauten", type:"fill-extrusion", source:vec, "source-layer":"building", minzoom:14,
+    add({ id:"bauten", type:"fill-extrusion", source:vec, "source-layer":"building", minzoom:14,
       filter:["!=", ["get", "hide_3d"], true],
       paint:{
         "fill-extrusion-color":mapTheme === "dunkel" ? "#3b4654" : "#d4d8de",
@@ -2289,20 +2339,22 @@ function addMapLayers(){
   const g = siteGeo();
   lmap.addSource("site-areas", { type:"geojson", data:g.areas });
   lmap.addSource("site-pts", { type:"geojson", data:g.pts });
+  lmap.addSource("site-edge", { type:"geojson", data:g.edge });
   const op = (on, off) => ["case", ["get", "dim"], off, on];
-  lmap.addLayer({ id:"site-fill", type:"fill", source:"site-areas", minzoom:13,
-    paint:{ "fill-color":["get", "color"], "fill-opacity":op(0.35, 0.08) } });
+  add({ id:"site-fill", type:"fill", source:"site-areas", minzoom:13,
+    paint:{ "fill-color":["get", "color"],
+            "fill-opacity":["interpolate", ["linear"], ["zoom"], 13, op(0.35, 0.08), 17, op(0.2, 0.06), 19, op(0.13, 0.05)] } });   // nah heller, damit Maschinen und Zeichnungen gut sichtbar bleiben
   // Zeichnungen (unter dem Rand der Baustelle)
   addHatch();
   lmap.addSource("drawings", { type:"geojson", data:drawingGeo() });
   const dop = (on) => ["case", ["get", "dim"], 0.2, on];
-  lmap.addLayer({ id:"dr-belag", type:"fill", source:"drawings", filter:["==", ["get", "kind"], "belag"],
+  add({ id:"dr-belag", type:"fill", source:"drawings", filter:["==", ["get", "kind"], "belag"],
     paint:{ "fill-color":["get", "color"], "fill-opacity":dop(0.3) } });
-  lmap.addLayer({ id:"dr-rasen", type:"fill", source:"drawings", filter:["==", ["get", "kind"], "rasen"],
+  add({ id:"dr-rasen", type:"fill", source:"drawings", filter:["==", ["get", "kind"], "rasen"],
     paint:{ "fill-pattern":"hatch-rasen", "fill-opacity":dop(1) } });
-  lmap.addLayer({ id:"dr-area-line", type:"line", source:"drawings", filter:["==", ["geometry-type"], "Polygon"],
+  add({ id:"dr-area-line", type:"line", source:"drawings", filter:["==", ["geometry-type"], "Polygon"],
     paint:{ "line-color":["get", "color"], "line-width":1.5, "line-opacity":dop(0.9) } });
-  lmap.addLayer({ id:"dr-strasse", type:"line", source:"drawings", filter:["==", ["get", "kind"], "strasse"],
+  add({ id:"dr-strasse", type:"line", source:"drawings", filter:["==", ["get", "kind"], "strasse"],
     layout:{ "line-cap":"round", "line-join":"round" },
     paint:{ "line-color":["get", "color"], "line-opacity":dop(0.95),
             "line-width":["interpolate", ["exponential", 2], ["zoom"], 14, 1.5, 20, 90] } });     // etwa 6 m breit
@@ -2312,34 +2364,34 @@ function addMapLayers(){
   const halfW = ["interpolate", ["exponential", 2], ["zoom"], 14, 0.8, 20, 48];
   const halfOff = ["interpolate", ["exponential", 2], ["zoom"], 14, ["*", ["get", "off"], 0.4], 20, ["*", ["get", "off"], 24]];
   const ern = ["==", ["get", "kind"], "erneuern"];
-  lmap.addLayer({ id:"dr-ern-full", type:"line", source:"drawings", filter:["all", ern, ["==", ["get", "w"], 1]],
+  add({ id:"dr-ern-full", type:"line", source:"drawings", filter:["all", ern, ["==", ["get", "w"], 1]],
     paint:{ "line-color":"#d93a3a", "line-width":fullW, "line-opacity":dop(0.95) } });
-  lmap.addLayer({ id:"dr-ern-full-w", type:"line", source:"drawings", filter:["all", ern, ["==", ["get", "w"], 1]],
+  add({ id:"dr-ern-full-w", type:"line", source:"drawings", filter:["all", ern, ["==", ["get", "w"], 1]],
     paint:{ "line-color":"#ffffff", "line-width":fullW, "line-dasharray":[1, 1], "line-opacity":dop(0.9) } });
-  lmap.addLayer({ id:"dr-ern-half", type:"line", source:"drawings", filter:["all", ern, ["<", ["get", "w"], 1]],
+  add({ id:"dr-ern-half", type:"line", source:"drawings", filter:["all", ern, ["<", ["get", "w"], 1]],
     paint:{ "line-color":"#d93a3a", "line-width":halfW, "line-offset":halfOff, "line-opacity":dop(0.95) } });
-  lmap.addLayer({ id:"dr-ern-half-w", type:"line", source:"drawings", filter:["all", ern, ["<", ["get", "w"], 1]],
+  add({ id:"dr-ern-half-w", type:"line", source:"drawings", filter:["all", ern, ["<", ["get", "w"], 1]],
     paint:{ "line-color":"#ffffff", "line-width":halfW, "line-offset":halfOff, "line-dasharray":[1, 1], "line-opacity":dop(0.9) } });
-  lmap.addLayer({ id:"dr-line", type:"line", source:"drawings", filter:["==", ["get", "kind"], "hecke"],
+  add({ id:"dr-line", type:"line", source:"drawings", filter:["==", ["get", "kind"], "hecke"],
     layout:{ "line-cap":"round", "line-join":"round" },
     paint:{ "line-color":["get", "color"], "line-opacity":dop(1), "line-width":["interpolate", ["linear"], ["zoom"], 14, 2, 19, 7] } });
-  lmap.addLayer({ id:"dr-leitung", type:"line", source:"drawings",
+  add({ id:"dr-leitung", type:"line", source:"drawings",
     filter:["match", ["get", "kind"], ["wasser", "abwasser", "gas", "strom", "kabel"], true, false],
     layout:{ "line-join":"round" },
     paint:{ "line-color":["get", "color"], "line-opacity":dop(1), "line-width":3, "line-dasharray":[2, 1.2] } });
-  lmap.addLayer({ id:"site-line", type:"line", source:"site-areas", minzoom:13,
+  add({ id:"site-line", type:"line", source:"site-areas", minzoom:13,
     paint:{ "line-color":["case", ["get", "sel"], cssVar("--sel"), ["get", "color"]],
             "line-width":["case", ["get", "sel"], 5, 3], "line-opacity":op(1, 0.25) } });
   // Bäume, Beschriftung der Zeichnungen, Maschinen
-  lmap.addLayer({ id:"dr-tree", type:"symbol", source:"drawings", filter:["==", ["get", "kind"], "baum"], minzoom:14,
+  add({ id:"dr-tree", type:"symbol", source:"drawings", filter:["==", ["get", "kind"], "baum"], minzoom:14,
     layout:{ "icon-image":"baum", "icon-allow-overlap":true, "icon-size":["interpolate", ["linear"], ["zoom"], 14, 0.5, 18, 1.4] },
     paint:{ "icon-opacity":dop(1) } });
-  const labPaint = { "text-color":"#e6edf3", "text-halo-color":"#0f1419", "text-halo-width":1.5, "text-opacity":dop(1) };
-  lmap.addLayer({ id:"dr-label", type:"symbol", source:"drawings", minzoom:15.5,
+  const labPaint = Object.assign({ "text-halo-width":1.5, "text-opacity":dop(1) }, labelInk());
+  add({ id:"dr-label", type:"symbol", source:"drawings", minzoom:15.5,
     filter:["==", ["geometry-type"], "LineString"],
     layout:{ "text-field":["get", "text"], "text-font":font, "text-size":11, "symbol-placement":"line", "text-max-angle":40 },
     paint:labPaint });
-  lmap.addLayer({ id:"dr-label-area", type:"symbol", source:"drawings", minzoom:15.5,
+  add({ id:"dr-label-area", type:"symbol", source:"drawings", minzoom:15.5,
     filter:["==", ["geometry-type"], "Polygon"],
     layout:{ "text-field":["get", "text"], "text-font":font, "text-size":11 },
     paint:labPaint });
@@ -2347,44 +2399,55 @@ function addMapLayers(){
   lmap.addSource("machines", { type:"geojson", data:machineGeo(mpos) });
   lmap.addSource("machines3d", { type:"geojson", data:mach3dGeo(mpos) });
   // Nah: Maschinen als 3D-Modelle in echter Grösse, Ring am Boden in der Statusfarbe, Name darüber
-  lmap.addLayer({ id:"mach-ring", type:"line", source:"machines3d", minzoom:16.5, filter:["==", ["get", "ring"], true],
+  add({ id:"mach-ring", type:"line", source:"machines3d", minzoom:16.5, filter:["==", ["get", "ring"], true],
     paint:{ "line-color":["get", "color"], "line-width":["interpolate", ["linear"], ["zoom"], 16.5, 2, 20, 6], "line-opacity":["case", ["get", "dim"], 0.3, 1] } });
-  lmap.addLayer({ id:"mach-3d", type:"fill-extrusion", source:"machines3d", minzoom:16.5, filter:["==", ["get", "part"], true],
+  add({ id:"mach-3d", type:"fill-extrusion", source:"machines3d", minzoom:16.5, filter:["==", ["get", "part"], true],
     paint:{ "fill-extrusion-color":["get", "color"], "fill-extrusion-base":["get", "base"], "fill-extrusion-height":["get", "top"], "fill-extrusion-opacity":1 } });
-  lmap.addLayer({ id:"mach-label", type:"symbol", source:"machines", minzoom:17.5,
-    layout:{ "text-field":["get", "label"], "text-font":font, "text-size":12, "text-anchor":"bottom", "text-offset":[0, -2.6], "text-optional":true },
-    paint:{ "text-color":"#ffffff", "text-halo-color":"#0f1419", "text-halo-width":1.8, "text-opacity":["case", ["get", "dim"], 0.35, 1] } });
-  // Weiter weg: Bild je Art und Status (die Modelle wären nur ein paar Pixel gross)
-  lmap.addLayer({ id:"mach-icon", type:"symbol", source:"machines", minzoom:14.5, maxzoom:17.5,
+  /* Schrift über dem Modell: Abstand in Schrifthöhen = Meter (lift) mal Pixel pro Meter. Gerechnet für die Mitte jeder Zoomstufe,
+     weil MapLibre den Abstand nur je ganze Zoomstufe neu setzt. Defekte zuerst, damit ihre Schrift bei Platzmangel bleibt. */
+  add({ id:"mach-label", type:"symbol", source:"machines", minzoom:17.5,
+    layout:{ "text-field":["get", "label"], "text-font":font, "text-size":12, "text-anchor":"bottom",
+             "text-radial-offset":["interpolate", ["exponential", 2], ["zoom"], 17, ["*", ["get", "lift"], 0.29], 20, ["*", ["get", "lift"], 2.33]],
+             "symbol-sort-key":["-", 3, ["get", "rank"]] },
+    paint:Object.assign({ "text-halo-width":1.8, "text-opacity":["case", ["get", "dim"], 0.35, 1] }, labelInk()) });
+  // Weiter weg: Bild je Art und Status (die Modelle wären nur ein paar Pixel gross). Defekte liegen obenauf.
+  add({ id:"mach-icon", type:"symbol", source:"machines", minzoom:14.5, maxzoom:17.5,
     layout:{ "icon-image":["get", "img"], "icon-allow-overlap":true, "icon-ignore-placement":true,
-             "text-field":["get", "label"], "text-font":font, "text-size":11, "text-offset":[0, 1.6], "text-anchor":"top",
-             "text-optional":true },
-    paint:{ "icon-opacity":["case", ["get", "dim"], 0.25, 1], "text-color":"#e6edf3", "text-halo-color":"#0f1419", "text-halo-width":1.5,
-            "text-opacity":["case", ["get", "dim"], 0.3, 1] } });
+             "icon-size":["interpolate", ["linear"], ["zoom"], 14.5, 0.6, 16.5, 0.85, 17.5, 1],
+             "symbol-sort-key":["get", "rank"] },
+    paint:{ "icon-opacity":["case", ["get", "dim"], 0.25, 1] } });
+  add({ id:"mach-icon-text", type:"symbol", source:"machines", minzoom:15.5, maxzoom:17.5,
+    layout:{ "text-field":["get", "label"], "text-font":font, "text-size":11, "text-anchor":"top",
+             "text-offset":["interpolate", ["linear"], ["zoom"], 15.5, ["literal", [0, 1.1]], 17.5, ["literal", [0, 1.5]]],
+             "symbol-sort-key":["-", 3, ["get", "rank"]] },
+    paint:Object.assign({ "text-halo-width":1.5, "text-opacity":["case", ["get", "dim"], 0.3, 1] }, labelInk()) });
   // Vorschau beim Zeichnen (ganz oben)
   lmap.addSource("draw-preview", { type:"geojson", data:previewGeo() });
-  lmap.addLayer({ id:"dp-fill", type:"fill", source:"draw-preview", filter:["==", ["geometry-type"], "Polygon"],
+  add({ id:"dp-fill", type:"fill", source:"draw-preview", filter:["==", ["geometry-type"], "Polygon"],
     paint:{ "fill-color":cssVar("--sel"), "fill-opacity":0.2 } });
-  lmap.addLayer({ id:"dp-band", type:"line", source:"draw-preview", filter:["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "band"], true]],
+  add({ id:"dp-band", type:"line", source:"draw-preview", filter:["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "band"], true]],
     paint:{ "line-color":"#d93a3a", "line-opacity":0.55,
             "line-width":["interpolate", ["exponential", 2], ["zoom"], 14, ["*", ["get", "w"], 1.6], 20, ["*", ["get", "w"], 95]],
             "line-offset":halfOff } });
-  lmap.addLayer({ id:"dp-line", type:"line", source:"draw-preview", filter:["==", ["geometry-type"], "LineString"],
+  add({ id:"dp-line", type:"line", source:"draw-preview", filter:["==", ["geometry-type"], "LineString"],
     paint:{ "line-color":cssVar("--sel"), "line-width":3, "line-dasharray":[1.5, 1] } });
-  lmap.addLayer({ id:"dp-pts", type:"circle", source:"draw-preview", filter:["==", ["geometry-type"], "Point"],
+  add({ id:"dp-pts", type:"circle", source:"draw-preview", filter:["==", ["geometry-type"], "Point"],
     paint:{ "circle-radius":["case", ["==", ["get", "tap"], true], 7, 6], "circle-color":["case", ["==", ["get", "tap"], true], cssVar("--sel"), "#ffffff"],
             "circle-stroke-color":["case", ["==", ["get", "tap"], true], "#ffffff", cssVar("--sel")], "circle-stroke-width":3 } });
-  lmap.addLayer({ id:"site-dot", type:"circle", source:"site-pts", maxzoom:13.5,
+  add({ id:"site-dot", type:"circle", source:"site-pts", maxzoom:13.5,
     paint:{ "circle-radius":["case", ["get", "sel"], 9, 7], "circle-color":["get", "color"],
             "circle-stroke-width":["case", ["get", "sel"], 3, 1.5],
             "circle-stroke-color":["case", ["get", "sel"], cssVar("--sel"), "#0f1419"],
             "circle-opacity":op(1, 0.25), "circle-stroke-opacity":op(1, 0.25) } });
-  lmap.addLayer({ id:"site-label", type:"symbol", source:"site-pts", minzoom:11,
-    layout:{ "text-field":["step", ["zoom"], ["get", "label"], 13.5, ["concat", ["get", "label"], "\n", ["get", "sub"]]],
-             "text-font":font, "text-size":12, "text-offset":[0, 1.3], "text-anchor":"top", "text-max-width":14,
-             "symbol-sort-key":["case", ["get", "sel"], 0, ["==", ["get", "status"], "broken"], 1, 2] },
-    paint:{ "text-color":cssVar("--text"), "text-halo-color":"#0f1419", "text-halo-width":1.5,
-            "text-opacity":op(1, 0.35) } });
+  const siteText = { "text-font":font, "text-size":12, "text-max-width":16,
+             "symbol-sort-key":["case", ["get", "sel"], 0, ["==", ["get", "status"], "broken"], 1, 2] };
+  const sitePaint = Object.assign({ "text-halo-width":1.6, "text-opacity":op(1, 0.35) }, labelInk());
+  add({ id:"site-label", type:"symbol", source:"site-pts", minzoom:11, maxzoom:16.5,
+    layout:Object.assign({ "text-field":["step", ["zoom"], ["get", "label"], 13.5, ["concat", ["get", "label"], "\n", ["get", "sub"]]],
+             "text-offset":[0, 1.3], "text-anchor":"top" }, siteText), paint:sitePaint });
+  // Nah: Name und Zustand oben am Rand der Baustelle, nicht mitten zwischen den Maschinen
+  add({ id:"site-label-edge", type:"symbol", source:"site-edge", minzoom:16.5,
+    layout:Object.assign({ "text-field":["concat", ["get", "label"], "\n", ["get", "sub"]], "text-anchor":"bottom" }, siteText), paint:sitePaint });
   SITE_LAYERS.forEach(id=>{
     lmap.on("mouseenter", id, ()=>{ lmap.getCanvas().style.cursor = "pointer"; });
     lmap.on("mouseleave", id, ()=>{ lmap.getCanvas().style.cursor = ""; });
@@ -2418,8 +2481,9 @@ async function initRealMap(cam){
       if(!lmap) return;
       lmap.addSource("dem", { type:"raster-dem", tiles:[DEM_TILES], encoding:"terrarium", tileSize:256, maxzoom:15,
         attribution:"Höhen © Mapzen" });
+      lmap.addSource("dem-hs", { type:"raster-dem", tiles:[DEM_TILES], encoding:"terrarium", tileSize:256, maxzoom:15 });   // eigene Quelle fürs Relief (bessere Darstellung)
       const first = lmap.getStyle().layers.find(l => l.type === "symbol");
-      if(mapTheme !== "luftbild") lmap.addLayer({ id:"relief", type:"hillshade", source:"dem",
+      if(mapTheme !== "luftbild") lmap.addLayer({ id:"relief", type:"hillshade", source:"dem-hs",
         paint:mapTheme === "dunkel" ? { "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#05080b", "hillshade-highlight-color":"#2a3542" }
                                      : { "hillshade-exaggeration":0.35, "hillshade-shadow-color":"#6b7380", "hillshade-highlight-color":"#ffffff" } }, first ? first.id : undefined);
       styleBasemap();
@@ -2479,6 +2543,7 @@ function syncMapSites(){
   if(!a || !p) return;
   const g = siteGeo();
   a.setData(g.areas); p.setData(g.pts);
+  const ed = lmap.getSource("site-edge"); if(ed) ed.setData(g.edge);
   const mpos = machinePositions();
   const ms = lmap.getSource("machines"); if(ms) ms.setData(machineGeo(mpos));
   const m3 = lmap.getSource("machines3d"); if(m3) m3.setData(mach3dGeo(mpos));

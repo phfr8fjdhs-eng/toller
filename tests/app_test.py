@@ -902,12 +902,17 @@ with sync_playwright() as p:
     m3 = z.evaluate("__mapData.machines3d.features.map(f => Object.assign({ type:f.geometry.type, n:(f.geometry.coordinates[0] || []).length }, f.properties))")
     parts = [x for x in m3 if x.get("part")]; rings = [x for x in m3 if x.get("ring")]
     bag = [x for x in parts if x["mid"] == "1"]
-    check("3D-Karte: jede Maschine hat ein Modell aus Bloecken und einen Ring am Boden", len(rings) == z.evaluate("machines.length") and len(bag) == 7 and all(x["type"] == "Polygon" and x["n"] == 5 for x in parts))
-    check("3D-Karte: echte Groessen (Bagger etwa 3 m hoch, nichts ueber 3.5 m)", max(x["top"] for x in bag) == 3.1 and all(0 <= x["base"] < x["top"] <= 3.5 for x in parts))
+    check("3D-Karte: jede Maschine hat ein Modell aus Bloecken und einen Ring am Boden", len(rings) == z.evaluate("machines.length") and len(bag) == z.evaluate("MACH3D.bagger.length") and len(bag) >= 10 and all(x["type"] == "Polygon" and x["n"] == 5 for x in parts))
+    check("3D-Karte: echte Groessen (Bagger etwa 3 m hoch, nichts ueber 3.5 m)", 3.0 <= max(x["top"] for x in bag) <= 3.3 and all(0 <= x["base"] < x["top"] <= 3.5 for x in parts))
     statusc = set(z.evaluate("['--ok','--wait','--bad','--off'].map(cssVar)"))
     check("3D-Karte: Modelle neutral, Status nur im Ring (Statusfarbe)", not (set(x["color"] for x in parts) & statusc) and all(x["color"] == z.evaluate("s => cssVar(STATUS_VAR[s])", x["status"]) for x in rings))
     ly = z.evaluate("__mapLayers")
     check("3D-Karte: nah Modelle und Schrift, weiter weg Bilder", ly["mach-3d"]["type"] == "fill-extrusion" and ly["mach-3d"]["minzoom"] >= 16 and ly["mach-icon"]["maxzoom"] == 17.5 and ly["mach-label"]["minzoom"] == 17.5)
+    lab = ly["mach-label"]["layout"]
+    check("3D-Karte: Schrift steht ueber dem Modell (Abstand waechst mit dem Zoom, je Maschinenart)", lab["text-anchor"] == "bottom" and "lift" in json.dumps(lab["text-radial-offset"]) and "zoom" in json.dumps(lab["text-radial-offset"])
+          and z.evaluate("machLift('bagger') > machLift('mini') && machLift('mini') > machLift('platte') && machLift('platte') > 0"))
+    check("3D-Karte: defekte Maschinen liegen obenauf und ihre Schrift hat Vorrang", ly["mach-icon"]["layout"]["symbol-sort-key"] == ["get", "rank"] and "rank" in json.dumps(lab["symbol-sort-key"])
+          and z.evaluate("STATUS_RANK.broken > STATUS_RANK.waiting && STATUS_RANK.waiting > STATUS_RANK.running"))
     z.evaluate("(()=>{ const m = machines.find(x => x.name === 'Bagger 1'); setMachine(m, { status:'broken', reason:'' }); })()"); z.wait_for_timeout(900)
     check("3D-Karte: Ring der defekten Maschine blinkt", "broken" in z.evaluate("JSON.stringify(__mapLayers['mach-ring'].paint['line-opacity'])") and any(x["status"] == "broken" and x["mid"] == "1" for x in z.evaluate("__mapData.machines3d.features.map(f => f.properties)") if x.get("ring")))
     z.evaluate("__mapClickFeature({ mid:'1', site:'s3' })"); z.wait_for_timeout(150)
