@@ -139,24 +139,6 @@
   #map.real #lmap{display:block}
   #map.real > svg,#map.real #sites{display:none}
   #map.picking #lmap{cursor:crosshair}
-  .lm{background:none;border:0}
-  .lm .site{position:static;transform:none;width:190px;left:auto!important;top:auto!important}
-  #lmap.compact .site{width:auto;max-width:130px;padding:5px 7px}
-  #lmap.compact .site .info,#lmap.compact .site .scene{display:none}
-  #lmap.compact .site .dots{display:flex;margin:4px 0 0}
-  #lmap.compact .site.sel{width:190px;max-width:none;padding:8px}
-  #lmap.compact .site.sel .scene{display:block}
-  #lmap.compact .site.sel .info{display:block}
-  #lmap.compact .site.sel .dots{display:none}
-  /* Ganz weit herausgezoomt: nur ein kleines Feld in der Statusfarbe, damit man den Ueberblick behaelt */
-  #lmap.mini .site:not(.sel){position:relative;width:14px;height:14px;max-width:none;padding:0;border-radius:4px;border-width:2px}
-  #lmap.mini .site:not(.sel) .top,#lmap.mini .site:not(.sel) .dots,#lmap.mini .site:not(.sel) .info,#lmap.mini .site:not(.sel) .scene{display:none}
-  #lmap.mini .site:not(.sel)::after{content:"";position:absolute;inset:-12px}   /* grosse Tippfläche trotz kleinem Feld */
-  #lmap.mini .site.running:not(.sel){background:var(--ok)}
-  #lmap.mini .site.waiting:not(.sel){background:var(--wait)}
-  #lmap.mini .site.broken:not(.sel){background:var(--bad)}
-  #lmap.mini .site.off:not(.sel){background:var(--off)}
-  #lmap .maplibregl-canvas{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.95) saturate(.7)}
   .maplibregl-ctrl-attrib{font-size:10px}
   .mapbtns{position:absolute;left:10px;top:10px;z-index:5;display:none;gap:6px}
   #map.real .mapbtns{display:flex}
@@ -1066,7 +1048,7 @@ function renderList(){
 function render(){
   // Karte
   if(lmap){
-    syncRealMarkers();
+    syncMapSites();
   } else {
     const layer = $("sites");
     if(sceneObs) sceneObs.disconnect();                 // alte Platzhalter nicht weiter beobachten
@@ -1539,24 +1521,120 @@ document.addEventListener("keydown", e=>{ if(e.key === "Escape" && v3) close3D()
 /* =============================================================== Karte (MapLibre + OpenFreeMap) */
 // Bewusst schlank für Handys: heller Minimal-Stil, keine 3D-Gebäude, Gelände nur als sanftes Relief.
 let lmap = null, mapReady = false, is3D = true;
-const lmarkers = {};
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+const SITE_R = 35;                     // Radius der Baustellenfläche in Metern, solange keine Strecke gezeichnet ist
+const SITE_LAYERS = ["site-fill", "site-line", "site-dot", "site-label"];
+let blinkTimer = null, blinkOn = true;
+
+/* Die Grundkarte (hell) wird beim Laden dunkel umgefärbt, statt sie per CSS-Filter umzukehren.
+   So erscheinen die Statusfarben auf der Karte genau gleich wie überall sonst. */
+function darkenBasemap(){
+  ((lmap.getStyle() || {}).layers || []).forEach(l=>{
+    const id = l.id.toLowerCase();
+    const set = (k, v)=>{ try{ lmap.setPaintProperty(l.id, k, v); }catch(e){} };
+    if(l.type === "background") set("background-color", "#121a22");
+    else if(l.type === "fill"){
+      set("fill-color", /water|ocean|lake|river/.test(id) ? "#0e2231" : /park|wood|forest|grass|landcover/.test(id) ? "#15211c" : /building/.test(id) ? "#1e2731" : "#151d26");
+      set("fill-outline-color", "rgba(0,0,0,0)");
+    }
+    else if(l.type === "line") set("line-color", /water|river/.test(id) ? "#163449" : /boundary|admin/.test(id) ? "#3a4757"
+      : /motorway|trunk|primary/.test(id) ? "#4a5868" : /rail/.test(id) ? "#39424d" : "#2f3b4a");
+    else if(l.type === "symbol" && l.layout && l.layout["text-field"]){
+      set("text-color", /water/.test(id) ? "#4f7a99" : "#8b98a5");
+      set("text-halo-color", "#0f1419");
+    }
+  });
+}
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const STATUS_VAR = { running:"--ok", waiting:"--wait", broken:"--bad", off:"--off" };
 
 function fallbackToSketch(){
+  if(blinkTimer){ clearInterval(blinkTimer); blinkTimer = null; }
   if(lmap){ try{ lmap.remove(); }catch(e){} }
   lmap = null; mapReady = false;
-  Object.keys(lmarkers).forEach(k => delete lmarkers[k]);
   $("lmap").innerHTML = "";
   $("map").classList.remove("real");
   render();
 }
 
-function updateCompact(){
-  if(!lmap) return;
-  const z = lmap.getZoom();
-  $("lmap").classList.toggle("compact", z < 13.5);   // weiter weg: nur Name und Punkte
-  $("lmap").classList.toggle("mini", z < 12.5);      // weit weg: nur ein Feld in der Statusfarbe
+// Fläche um einen Punkt (Kreis aus 32 Ecken), solange keine Strecke gezeichnet ist
+function circleRing(lng, lat, r){
+  const dLat = r / 111320, dLng = r / (111320 * Math.cos(lat * Math.PI / 180)), pts = [];
+  for(let i = 0; i <= 32; i++){ const a = i / 32 * 2 * Math.PI; pts.push([lng + dLng*Math.cos(a), lat + dLat*Math.sin(a)]); }
+  return pts;
+}
+
+// Baustellen als Kartendaten: Fläche (nah), Punkt mit Schrift (weit). Farbe = schlechtester Status, Sparte nur als Buchstabe
+function siteGeo(){
+  const areas = [], pts = [];
+  sites.concat([DEPOT]).forEach(s=>{
+    const depot = s.id === "depot";
+    const st = depot ? "off" : siteStatus(s);
+    const nOpen = depot ? 0 : openNeeds(s.id).length;
+    const nM = machines.filter(m => loc(m) === s.id).length;
+    const props = {
+      id:s.id, status:st, depot, sel:selected === s.id,
+      dim:!depot && !showSparte(s.sparte),
+      color:cssVar(STATUS_VAR[st]),
+      label:(s.sparte ? TAG[s.sparte] + " · " : "") + s.name,
+      sub:(depot ? "" : SHORT[st] + " · ") + nM + (nM === 1 ? " Maschine" : " Maschinen") + (nOpen ? " · " + nOpen + " Bedarf" : "")
+    };
+    areas.push({ type:"Feature", properties:props, geometry:{ type:"Polygon", coordinates:[circleRing(s.lng, s.lat, SITE_R)] } });
+    pts.push({ type:"Feature", properties:props, geometry:{ type:"Point", coordinates:[s.lng, s.lat] } });
+  });
+  return { areas:{ type:"FeatureCollection", features:areas }, pts:{ type:"FeatureCollection", features:pts } };
+}
+
+function addMapLayers(){
+  const style = lmap.getStyle() || {};
+  const vec = Object.keys(style.sources || {}).find(k => style.sources[k].type === "vector");
+  const sym = (style.layers || []).find(l => l.type === "symbol" && l.layout && l.layout["text-font"]);
+  const font = sym ? sym.layout["text-font"] : ["Noto Sans Regular"];
+  // 3D-Häuser aus den Kartendaten (OpenStreetMap-Höhen), erst ab Strassen-Zoom, damit es flüssig bleibt
+  if(vec){
+    lmap.addLayer({ id:"bauten", type:"fill-extrusion", source:vec, "source-layer":"building", minzoom:14,
+      filter:["!=", ["get", "hide_3d"], true],
+      paint:{
+        "fill-extrusion-color":"#3b4654",
+        "fill-extrusion-height":["interpolate", ["linear"], ["zoom"], 14, 0, 14.6, ["coalesce", ["get", "render_height"], 8]],
+        "fill-extrusion-base":["coalesce", ["get", "render_min_height"], 0],
+        "fill-extrusion-opacity":0.85
+      } });
+  }
+  const g = siteGeo();
+  lmap.addSource("site-areas", { type:"geojson", data:g.areas });
+  lmap.addSource("site-pts", { type:"geojson", data:g.pts });
+  const op = (on, off) => ["case", ["get", "dim"], off, on];
+  lmap.addLayer({ id:"site-fill", type:"fill", source:"site-areas", minzoom:13,
+    paint:{ "fill-color":["get", "color"], "fill-opacity":op(0.35, 0.08) } });
+  lmap.addLayer({ id:"site-line", type:"line", source:"site-areas", minzoom:13,
+    paint:{ "line-color":["case", ["get", "sel"], cssVar("--sel"), ["get", "color"]],
+            "line-width":["case", ["get", "sel"], 5, 3], "line-opacity":op(1, 0.25) } });
+  lmap.addLayer({ id:"site-dot", type:"circle", source:"site-pts", maxzoom:13.5,
+    paint:{ "circle-radius":["case", ["get", "sel"], 9, 7], "circle-color":["get", "color"],
+            "circle-stroke-width":["case", ["get", "sel"], 3, 1.5],
+            "circle-stroke-color":["case", ["get", "sel"], cssVar("--sel"), "#0f1419"],
+            "circle-opacity":op(1, 0.25), "circle-stroke-opacity":op(1, 0.25) } });
+  lmap.addLayer({ id:"site-label", type:"symbol", source:"site-pts", minzoom:11,
+    layout:{ "text-field":["step", ["zoom"], ["get", "label"], 13.5, ["concat", ["get", "label"], "\n", ["get", "sub"]]],
+             "text-font":font, "text-size":12, "text-offset":[0, 1.3], "text-anchor":"top", "text-max-width":14,
+             "symbol-sort-key":["case", ["get", "sel"], 0, ["==", ["get", "status"], "broken"], 1, 2] },
+    paint:{ "text-color":cssVar("--text"), "text-halo-color":"#0f1419", "text-halo-width":1.5,
+            "text-opacity":op(1, 0.35) } });
+  SITE_LAYERS.forEach(id=>{
+    lmap.on("mouseenter", id, ()=>{ lmap.getCanvas().style.cursor = "pointer"; });
+    lmap.on("mouseleave", id, ()=>{ lmap.getCanvas().style.cursor = ""; });
+  });
+  // Störung: rot blinkend wie überall sonst (nur der Rand, nur solange eine Baustelle gestört ist)
+  blinkTimer = setInterval(()=>{
+    if(!lmap || !mapReady || !lmap.getLayer("site-line")) return;
+    const any = sites.some(x => siteStatus(x) === "broken");
+    blinkOn = any ? !blinkOn : true;
+    const v = blinkOn ? 1 : 0.15;
+    lmap.setPaintProperty("site-line", "line-opacity", ["case", ["get", "dim"], 0.25, ["==", ["get", "status"], "broken"], v, 1]);
+    lmap.setPaintProperty("site-dot", "circle-opacity", ["case", ["get", "dim"], 0.25, ["==", ["get", "status"], "broken"], v, 1]);
+  }, 700);
 }
 
 async function initRealMap(){
@@ -1567,7 +1645,7 @@ async function initRealMap(){
     $("map").classList.add("real");
     lmap = new maplibregl.Map({
       container:"lmap", style:MAP_STYLE, center:[8.85, 47.235], zoom:11.5, pitch:55, bearing:-15,
-      maxPitch:70, maxZoom:17, attributionControl:{ compact:true }
+      maxPitch:70, maxZoom:18, attributionControl:{ compact:true }
     });
     lmap.addControl(new maplibregl.NavigationControl({ visualizePitch:true }), "top-right");
     lmap.on("load", ()=>{
@@ -1576,18 +1654,24 @@ async function initRealMap(){
         attribution:"Höhendaten: Mapzen, AWS Terrain Tiles" });
       const first = lmap.getStyle().layers.find(l => l.type === "symbol");
       lmap.addLayer({ id:"relief", type:"hillshade", source:"dem",
-        paint:{ "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#3a4350" } }, first ? first.id : undefined);
+        paint:{ "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#05080b", "hillshade-highlight-color":"#2a3542" } }, first ? first.id : undefined);
+      darkenBasemap();
+      addMapLayers();
       mapReady = true;
       set3D(true);
       showOverview(0);
       render();
     });
-    lmap.on("zoom", updateCompact);
     lmap.on("click", e=>{
-      if(!pickCb) return;
-      const cb = pickCb; pickCb = null;
-      $("map").classList.remove("picking"); $("pickBar").hidden = true;
-      cb(e.lngLat.lat, e.lngLat.lng);
+      if(pickCb){
+        const cb = pickCb; pickCb = null;
+        $("map").classList.remove("picking"); $("pickBar").hidden = true;
+        cb(e.lngLat.lat, e.lngLat.lng);
+        return;
+      }
+      if(!mapReady || !e.point) return;
+      const f = lmap.queryRenderedFeatures(e.point, { layers:SITE_LAYERS.filter(id => lmap.getLayer(id)) });
+      if(f.length) selectSite(f[0].properties.id);
     });
     // Wenn der Kartenstil nicht lädt (kein Internet, gesperrt), zurück zur Skizze
     lmap.on("error", e=>{
@@ -1615,27 +1699,13 @@ function showOverview(ms){
   lmap.fitBounds(b, { padding:70, maxZoom:14, pitch:is3D ? 55 : 0, bearing:is3D ? -15 : 0, duration:typeof ms === "number" ? ms : 900 });
 }
 
-function syncRealMarkers(){
-  const all = sites.concat([DEPOT]);
-  Object.keys(lmarkers).forEach(id=>{
-    if(!all.some(s => s.id === id)){ lmarkers[id].remove(); delete lmarkers[id]; }
-  });
-  all.forEach(s=>{
-    const content = marker(s, s.id === "depot");
-    if(lmarkers[s.id]){
-      const wrap = lmarkers[s.id].getElement();
-      wrap.innerHTML = "";
-      wrap.appendChild(content);
-      lmarkers[s.id].setLngLat([s.lng, s.lat]);
-    } else {
-      const wrap = document.createElement("div");
-      wrap.className = "lm";
-      wrap.appendChild(content);
-      lmarkers[s.id] = new maplibregl.Marker({ element:wrap, anchor:"center" }).setLngLat([s.lng, s.lat]).addTo(lmap);
-    }
-    lmarkers[s.id].getElement().style.zIndex = selected === s.id ? 5 : 1;
-  });
-  updateCompact();
+// Baustellen auf der echten Karte aktualisieren (keine Kärtchen mehr, alles ist Teil der Karte)
+function syncMapSites(){
+  if(!lmap || !mapReady) return;
+  const a = lmap.getSource("site-areas"), p = lmap.getSource("site-pts");
+  if(!a || !p) return;
+  const g = siteGeo();
+  a.setData(g.areas); p.setData(g.pts);
 }
 
 /* =============================================================== Material fehlt: Katalog und eigene Einträge

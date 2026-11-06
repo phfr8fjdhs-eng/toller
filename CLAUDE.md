@@ -30,7 +30,10 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Adresssuche beim Anlegen einer Baustelle: swisstopo SearchServer (kostenlos). Noch nicht gegen den echten Dienst getestet
 - **Baustelle aus Offerte oder Beschreibung (nur Admin, in der Seite):** Im Fenster "Neue Baustelle" fügt der Admin Text ein, `parseOffer` schlägt Name, Sparte, Adressen und Bedarfszeilen vor (reiner Text, keine Bibliothek, kein PDF-Lesen). Die erste Adresse wird über swisstopo gesucht und als Ort vorgeschlagen, weitere Adressen aus dem Text stehen als Knopf zur Wahl (der Absender der Offerte steht oft im Kopf). Der Admin prüft und wählt Zeilen ab oder ändert sie. Gespeichert wird nur das Gewählte: Baustelle und Bedarf (`addNeeds`, ein Speichern). **Preise, Summen und Kundendaten werden entfernt, der Rohtext wird nie gespeichert.** Eine geratene erste Zeile ersetzt nie einen getippten Namen. Die Rechte in der Datenbank sind unverändert (Baustellen und Bedarf dürfen alle Freigegebenen anlegen), das Feld ist nur für Admins sichtbar. Der Parser nutzt bewusst keine neueren Sprachmittel (`\p{L}`, Lookbehind), damit alte Handys die Seite weiter laden
 - **Speicher auf dem Handy ist wichtig:** Neue Funktionen laden erst bei Gebrauch, ohne Bibliotheken, Fenster werden beim Schliessen entfernt. `tests/speicher_test.py` misst Heap und Seitenelemente im Leicht-Modus (60 Baustellen, 180 Maschinen) und hält Grenzen ein. Gemessen ist nur der JavaScript-Heap, nicht Grafikspeicher
-- Gebiet: Rapperswil-Jona und Umgebung. Die Karte muss auf Handys flüssig laufen, darum bewusst schlank (kein 3D-Gebäude-Modell, Schalter "3D" für 2D-Ansicht, kompakte Marker bei weitem Zoom)
+- Gebiet: Rapperswil-Jona und Umgebung. Die Karte gibt es nur im Modus 3D (Computer), Handys im Modus Leicht laden sie nie
+- **Baustellen sind Teil der Karte** (keine Kärtchen mit Bild auf der Karte): Fläche und Rand in der Statusfarbe ab Zoom 13 (`site-fill`, `site-line`, Kreis mit `SITE_R` Metern um den Punkt), weit weg ein Punkt (`site-dot`), Schrift mit Sparten-Buchstabe und Name, nah zusätzlich Status, Maschinen und Bedarf (`site-label`, feste Schriftgrösse). Gestört = Rand blinkt rot. Antippen öffnet die Details. Daten aus `siteGeo()`, aktualisiert mit `syncMapSites()`
+- 3D-Häuser aus den OpenFreeMap-Daten (OpenStreetMap-Höhen, `render_height`), Ebene `bauten`, erst ab Zoom 14. Einfache Blöcke, Höhe fehlt teilweise (dann 8 m)
+- Die helle Grundkarte wird beim Laden dunkel umgefärbt (`darkenBasemap`). Kein CSS-Filter auf der Karte, sonst stimmen die Statusfarben nicht mehr
 - Veröffentlichung: Netlify veröffentlicht nur den Ordner `public` (siehe `netlify.toml`). Nur Dateien, die jeder sehen darf, gehören dort hinein. `CLAUDE.md`, Anleitungen, `supabase`, `tests` und `.claude` bleiben ausserhalb
 
 ## Datenmodell (Datenbank)
@@ -87,5 +90,6 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Kartenanbieter für den Firmenbetrieb festlegen (Bedingungen von OpenFreeMap prüfen, Alternativen: swisstopo oder bezahlter Anbieter)
 - Supabase-Plan und Datenschutz für den Firmenbetrieb klären (Region, Backups, Pausierung)
 - Mehr als 1000 Baustellen oder Maschinen: Abfragen in Seiten teilen
-- Optional: 3D-Gebäude und feineres Gelände, nur wenn es auf Handys flüssig bleibt
+- Genauere 3D-Gebäude von swisstopo prüfen (offizielle Daten statt OpenStreetMap)
+- Baustelle als Strecke entlang der Strasse zeichnen und Maschinen als Klötze auf der Karte (in Arbeit)
 - Auswertung des Verlaufs ausbauen (Wochenbericht, Export, Vergleich der Maschinen). Der Verlauf selbst ist gebaut. Offen: wie lange Daten aufbewahrt werden (Datenschutz, Namen der Meldenden) und ob Kopien gelöscht werden sollen

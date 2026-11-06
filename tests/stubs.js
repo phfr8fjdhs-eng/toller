@@ -41,9 +41,16 @@
   window.maplibregl = {
     Map: function(){
       this.addControl = function(){};
-      this.on = function(ev, cb){ (handlers[ev] = handlers[ev] || []).push(cb); if(ev === "load") setTimeout(cb, 150); };
-      this.addSource = function(){}; this.getStyle = function(){ return { layers:[{ id:"l", type:"symbol" }] }; };
-      this.addLayer = function(){}; this.setTerrain = function(){}; this.easeTo = function(){};
+      this.on = function(ev, a, b){ const cb = typeof a === "function" ? a : b; (handlers[ev] = handlers[ev] || []).push(cb); if(ev === "load") setTimeout(cb, 150); };
+      const data = window.__mapData = {}, layers = window.__mapLayers = {};
+      this.addSource = function(id, o){ data[id] = o.data; };
+      this.getSource = function(id){ return id in data ? { setData:function(d){ data[id] = d; } } : undefined; };
+      this.getStyle = function(){ return { layers:[{ id:"l", type:"symbol", layout:{ "text-font":["Noto Sans Regular"] } }], sources:{ openmaptiles:{ type:"vector" } } }; };
+      this.addLayer = function(l){ layers[l.id] = l; }; this.getLayer = function(id){ return layers[id]; };
+      this.setPaintProperty = function(id, k, v){ if(layers[id]) layers[id].paint[k] = v; };
+      this.queryRenderedFeatures = function(){ return window.__mapHit || []; };
+      this.getCanvas = function(){ return document.createElement("canvas"); };
+      this.setTerrain = function(){}; this.easeTo = function(){};
       this.fitBounds = function(){ window.__fits = (window.__fits || 0) + 1; };
       this.flyTo = function(o){ window.__fly = o.center.join(","); };
       this.getZoom = function(){ return 12; };
@@ -60,6 +67,10 @@
     }
   };
   window.__mapClick = function(lat, lng){ (handlers.click || []).forEach(cb => cb({ lngLat:{ lat, lng } })); };
+  // Klick auf eine Baustelle der Karte (Fläche oder Punkt)
+  window.__mapClickSite = function(id){ window.__mapHit = [{ properties:{ id } }]; (handlers.click || []).forEach(cb => cb({ lngLat:{ lat:0, lng:0 }, point:{ x:1, y:1 } })); window.__mapHit = []; };
+  // Baustellen, wie die Karte sie gerade zeigt
+  window.__mapSites = function(){ const d = window.__mapData && window.__mapData["site-pts"]; return d ? d.features.map(f => f.properties) : []; };
 
   // ---- Supabase
   const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], downtimes:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };

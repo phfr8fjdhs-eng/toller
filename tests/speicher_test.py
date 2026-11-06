@@ -87,7 +87,7 @@ check("Leicht: Heap unter %.0f MB bei %d Baustellen und %d Maschinen" % (LIMITS[
 check("Leicht: höchstens %d Seitenelemente" % LIMITS["nodes"], gross["nodes"] < LIMITS["nodes"], str(gross["nodes"]))
 check("Leicht: Szenen werden erst beim Hinscrollen gezeichnet (nicht für alle %d Baustellen)" % SITES, gross["scenes"] < SITES / 2, "%d Szenen" % gross["scenes"])
 check("Leicht: die Liste zeigt trotzdem alle Baustellen", gross["sites"] == SITES, str(gross["sites"]))
-check("Leicht hat deutlich weniger Seitenelemente als 3D (Karten-Marker mit Szenen entfallen)", gross["nodes"] < d3["nodes"] * 0.6, "%d gegen %d" % (gross["nodes"], d3["nodes"]))
+check("3D: Baustellen sind Teil der Karte, keine Kärtchen mit Szenen auf der Karte (weniger Seitenelemente als Leicht)", d3["nodes"] < gross["nodes"], "%d gegen %d" % (d3["nodes"], gross["nodes"]))
 check("Verlauf: lädt höchstens 500 Einträge, zeigt davon nur 40 Zeilen", gross["hist_rows"] == 40, str(gross["hist_rows"]))
 check("Verlauf: das offene Fenster hat höchstens 700 Seitenelemente", gross["hist_dom"] < 700, "%d Elemente im Fenster, insgesamt %d zusätzlich" % (gross["hist_dom"], gross["nodes_hist_open"] - gross["nodes_before_hist"]))
 check("Verlauf: nach dem Schliessen sind die Seitenelemente wieder wie vorher", gross["dom_after_close"] == gross["dom_before_hist"], "%d vorher, %d nachher" % (gross["dom_before_hist"], gross["dom_after_close"]))
