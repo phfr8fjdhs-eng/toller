@@ -8,7 +8,8 @@
   const T = window.__three = { renderers:[], rendered:0, disposed:0, contextLost:0, rendererDisposed:0, lastScene:null, texts:[], loads:0, meshes:0 };
   const vec = () => ({ x:0, y:0, z:0, set(x, y, z){ this.x = x; this.y = y; this.z = z; return this; } });
   class Obj {
-    constructor(){ this.children = []; this.parent = null; this.userData = {}; this.position = vec(); this.rotation = vec(); this.scale = vec(); this.visible = true; this.holes = []; this.target = vec(); }
+    constructor(){ this.children = []; this.parent = null; this.userData = {}; this.position = vec(); this.rotation = vec(); this.scale = vec(); this.visible = true; this.holes = []; this.target = vec();
+      this.shadow = { mapSize:vec(), camera:{}, bias:0 }; this.shadowMap = {}; }
     add(...c){ c.forEach(x => { x.parent = this; this.children.push(x); }); return this; }
     remove(c){ this.children = this.children.filter(x => x !== c); }
     traverse(f){ f(this); this.children.forEach(c => c.traverse(f)); }
