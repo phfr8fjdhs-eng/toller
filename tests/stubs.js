@@ -62,7 +62,12 @@
       this.getCanvas = function(){ return document.createElement("canvas"); };
       const images = window.__mapImages = {};
       this.addImage = function(id, img){ images[id] = img; }; this.hasImage = function(id){ return id in images; };
-      this.setTerrain = function(){}; this.easeTo = function(){};
+      let terrain = null;
+      this.setTerrain = function(o){ terrain = o; }; this.getTerrain = function(){ return terrain; };
+      this.easeTo = function(o){ (window.__eases = window.__eases || []).push(o); };
+      this.isMoving = function(){ return false; };
+      // Hoehe der Kartenmitte gegenueber dem Gelaende (im Test gesetzt, 0 = stimmt)
+      this.queryTerrainElevation = function(){ return terrain ? (window.__terrainDiff || 0) : null; };
       this.fitBounds = function(){ window.__fits = (window.__fits || 0) + 1; };
       this.flyTo = function(o){ window.__fly = o.center.join(","); };
       this.getZoom = function(){ return 12; };

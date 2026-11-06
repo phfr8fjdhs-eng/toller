@@ -913,6 +913,13 @@ with sync_playwright() as p:
           and z.evaluate("machLift('bagger') > machLift('mini') && machLift('mini') > machLift('platte') && machLift('platte') > 0"))
     check("3D-Karte: defekte Maschinen liegen obenauf und ihre Schrift hat Vorrang", ly["mach-icon"]["layout"]["symbol-sort-key"] == ["get", "rank"] and "rank" in json.dumps(lab["symbol-sort-key"])
           and z.evaluate("STATUS_RANK.broken > STATUS_RANK.waiting && STATUS_RANK.waiting > STATUS_RANK.running"))
+    # Gelaende: steht die Kamera nach dem Laden falsch (Hoehendaten kamen zu spaet), wird die Hoehe einmal nachgefuehrt
+    z.evaluate("window.__eases = []; window.__terrainDiff = 420; set3D(true, true); (__mapHandlers.idle || []).forEach(f => f());")
+    e1 = z.evaluate("window.__eases")
+    z.evaluate("window.__eases = []; window.__terrainDiff = 0; (__mapHandlers.idle || []).forEach(f => f());")
+    check("3D-Karte: Gelaende-Hoehe wird nachgefuehrt, wenn sie nicht stimmt (sonst bleibt die Karte nah leer)", len(e1) == 1 and e1[0].get("duration") == 0 and "center" in e1[0] and z.evaluate("window.__eases.length") == 0, str(e1))
+    z.evaluate("window.__eases = []; set3D(true, true)")
+    check("3D-Karte: nach Kartenart-Wechsel bleibt der Blickwinkel (keine Kamerafahrt)", z.evaluate("window.__eases.length") == 0)
     z.evaluate("(()=>{ const m = machines.find(x => x.name === 'Bagger 1'); setMachine(m, { status:'broken', reason:'' }); })()"); z.wait_for_timeout(900)
     check("3D-Karte: Ring der defekten Maschine blinkt", "broken" in z.evaluate("JSON.stringify(__mapLayers['mach-ring'].paint['line-opacity'])") and any(x["status"] == "broken" and x["mid"] == "1" for x in z.evaluate("__mapData.machines3d.features.map(f => f.properties)") if x.get("ring")))
     z.evaluate("__mapClickFeature({ mid:'1', site:'s3' })"); z.wait_for_timeout(150)

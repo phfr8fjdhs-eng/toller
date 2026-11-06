@@ -1436,12 +1436,12 @@ function softRender(){
   render();
 }
 
-function selectSite(id){
+function selectSite(id, noFly){
   if(pickCb) return;
   selected = id;
   const s = findSite(id);
-  if(lmap && mapReady && s){
-    lmap.flyTo({ center:[s.lng, s.lat], zoom:Math.max(lmap.getZoom(), 14.5), pitch:is3D ? 60 : 0, duration:1200 });
+  if(lmap && mapReady && s && !noFly){
+    flyCam([s.lng, s.lat], Math.max(lmap.getZoom(), 14.5), is3D ? 60 : 0, 1200);
   }
   render();
 }
@@ -2238,17 +2238,15 @@ function flashMachine(m){
 }
 // Aus der Tabelle: Karte fliegt zur Maschine und zeigt das Fenster. Im Modus Leicht: Baustelle öffnen, Maschine hervorheben.
 function gotoMachine(m){
-  selectSite(loc(m));
-  if(MODE === "3d" && lmap && mapReady){
-    const p = machinePositions().get(String(m.id));
-    if(p){
-      lmap.flyTo({ center:p.pos, zoom:19, pitch:60, duration:1500 });
-      const mapEl = $("map"); if(mapEl && mapEl.scrollIntoView) mapEl.scrollIntoView({ behavior:"smooth", block:"center" });
-      showMachinePopup(m);
-      hlMachine = String(m.id); render();
-      setTimeout(()=>{ if(hlMachine === String(m.id)){ hlMachine = null; softRender(); } }, 4000);
-      return;
-    }
+  const p = MODE === "3d" && lmap && mapReady ? machinePositions().get(String(m.id)) : null;
+  selectSite(loc(m), !!p);                                     // nur eine Fahrt: direkt zur Maschine
+  if(p){
+    flyCam(p.pos, 19, 60, 1500);                               // mit Gelände sicher über dem Boden, Maschine in der Mitte
+    const mapEl = $("map"); if(mapEl && mapEl.scrollIntoView) mapEl.scrollIntoView({ behavior:"smooth", block:"center" });
+    showMachinePopup(m);
+    hlMachine = String(m.id); render();
+    setTimeout(()=>{ if(hlMachine === String(m.id)){ hlMachine = null; softRender(); } }, 4000);
+    return;
   }
   flashMachine(m);
 }
@@ -2489,7 +2487,11 @@ async function initRealMap(cam){
       styleBasemap();
       addMapLayers();
       mapReady = true;
-      set3D(cam ? cam.pitch > 0 : true);
+      set3D(cam ? cam.pitch > 0 : true, !!cam);
+      lmap.on("idle", settleTerrain);
+      lmap.on("moveend", settleSoon);
+      lmap.on("sourcedata", e=>{ if(e && e.sourceId === "dem" && e.tile) settleSoon(); });   // Höhendaten neu da
+      lmap.on("movestart", e=>{ if(e && e.originalEvent) flySeq++; });                       // Finger oder Maus: keine Nachfahrt
       if(!cam) showOverview(0);
       render();
     });
@@ -2520,19 +2522,62 @@ async function initRealMap(cam){
   }
 }
 
-function set3D(on){
+function set3D(on, keepView){
   is3D = on;
   const b = $("btn3d");
   if(b) b.classList.toggle("active", on);
   if(!lmap || !mapReady) return;
   lmap.setTerrain(on ? { source:"dem", exaggeration:1.4 } : null);
-  lmap.easeTo({ pitch:on ? 55 : 0, bearing:on ? -15 : 0, duration:800 });
+  if(!keepView) lmap.easeTo({ pitch:on ? 55 : 0, bearing:on ? -15 : 0, duration:800 });   // nach "Kartenart" bleibt der Blickwinkel
+}
+/* Gelände (MapLibre 4.7.1): Nach Kamerafahrten aus dem Code (Baustelle, Maschine, Übersicht) bleibt die Höhe der Kartenmitte
+   auf dem alten Wert stehen, oft 0 m, weil die Höhendaten noch nicht da waren. Eine Fahrt nah heran (Zoom 19) endet dann
+   unter dem Gelände: MapLibre hebt die Kamera auf den Boden, der Blick wird flach und die Karte leer. Darum die Höhe vor jeder
+   Fahrt und nach dem Laden nachführen. Die Kamera bleibt dabei, wo sie ist (gleiches Bild), nur die Mitte liegt danach richtig
+   auf dem Gelände. freezeElevation ist eine Option von MapLibre selbst (so beenden die Finger-Gesten ihre Bewegung). */
+function settleTerrain(){
+  if(!lmap || !mapReady || !lmap.getTerrain() || lmap.isMoving()) return;
+  const d = lmap.queryTerrainElevation(lmap.getCenter());
+  if(d && Math.abs(d) > 3) lmap.easeTo({ center:lmap.getCenter(), duration:0, freezeElevation:true });
+}
+let settleTimer = 0;
+const settleSoon = () => { clearTimeout(settleTimer); settleTimer = setTimeout(settleTerrain, 300); };
+/* Kamerafahrt mit Gelände. MapLibre 4.7.1 rechnet das Ziel mit der Höhe der jetzigen Mitte. Liegt das Ziel höher oder tiefer,
+   landet die Kamera zu tief (bei Zoom 19 sogar im Boden) und schaut neben das Ziel. Darum Zoom und Mitte so anpassen, dass die
+   Kamera in der gewünschten Höhe über dem Ziel steht und genau auf das Ziel am Boden schaut. Ohne Höhendaten: normale Fahrt. */
+let flySeq = 0;                                                  // jede neue Fahrt oder Geste bricht die alte Nachfahrt ab
+function flyCam(center, zoom, pitch, duration){
+  if(lmap.isMoving()) lmap.stop();                             // laufende Fahrt beenden, damit die Höhe stimmt
+  settleTerrain();
+  const id = ++flySeq, o = { center, zoom, duration };
+  if(pitch != null) o.pitch = pitch;
+  let again = false;
+  if(lmap.getTerrain()){
+    const dh = lmap.queryTerrainElevation(center), base = lmap.transform ? lmap.transform.elevation : 0;
+    if(dh && Math.abs(dh) > 1 && Math.abs(dh + base) > 1){                 // Ziel hat Höhendaten und liegt anders hoch
+      const lat = center[1] * Math.PI / 180, p = (pitch == null ? lmap.getPitch() : pitch) * Math.PI / 180, b = lmap.getBearing() * Math.PI / 180;
+      const ppm = Math.pow(2, zoom) * 512 / (40075016.686 * Math.cos(lat));                                 // Pixel pro Meter beim Zielzoom
+      const h = Math.cos(p) * 0.5 * (lmap.getCanvas().clientHeight || 600) / Math.tan(0.6435 / 2) / ppm;   // Kamerahöhe über der Mitte (m)
+      const f = 1 + dh / h;
+      again = f < 0.5;                                          // Ziel viel tiefer: so tief kommt die Fahrt nicht, danach hinunter
+      o.zoom = Math.min(20, zoom - Math.log(Math.max(0.25, f)) / Math.LN2);
+      const s = dh * Math.tan(p);                                       // die gerechnete Mitte liegt um dh tiefer: so weit hinter dem Ziel
+      o.center = [center[0] + s * Math.sin(b) / (111320 * Math.cos(lat)), center[1] + s * Math.cos(b) / 110574];
+    }
+  }
+  lmap.flyTo(o);
+  if(again) lmap.once("moveend", ()=>{
+    if(id !== flySeq || !lmap) return;
+    settleTerrain();                                           // jetzt stimmt die Höhe am Ziel
+    lmap.easeTo({ center, zoom, duration:700 });
+  });
 }
 
 function showOverview(ms){
   if(!lmap || !mapReady) return;
   const b = new maplibregl.LngLatBounds();
   sites.concat([DEPOT]).forEach(s => b.extend([s.lng, s.lat]));
+  settleTerrain();
   lmap.fitBounds(b, { padding:70, maxZoom:14, pitch:is3D ? 55 : 0, bearing:is3D ? -15 : 0, duration:typeof ms === "number" ? ms : 900 });
 }
 
@@ -2561,7 +2606,7 @@ function startDrawing(s, kind, label){
   drawState = { site:s.id, kind, label:label || "", pts:[], taps:[], manual:false, seite:"beide", err:"" };
   $("drawBar").hidden = false; $("map").classList.add("picking");
   const c = siteCenter(s);
-  lmap.flyTo({ center:c, zoom:Math.max(lmap.getZoom(), 17), duration:900 });
+  flyCam(c, Math.max(lmap.getZoom(), 17), null, 900);
   $("map").scrollIntoView({ behavior:"smooth", block:"center" });
   updateDrawing();
 }
