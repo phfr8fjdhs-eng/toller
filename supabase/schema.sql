@@ -49,6 +49,13 @@ create table if not exists public.machines (
   created_by  uuid default auth.uid(),
   updated_at  timestamptz not null default now()
 );
+-- Weitere Sparten einer Baustelle (zusätzlich zur Hauptsparte), z. B. Strassenbau + Tiefbau zusammen.
+-- Die Hauptsparte steht weiter in "sparte". Der Trigger sites_sparten entfernt Doppelte und die Hauptsparte.
+alter table public.sites add column if not exists weitere_sparten text[] not null default '{}';
+alter table public.sites drop constraint if exists sites_weitere_sparten_check;
+alter table public.sites add constraint sites_weitere_sparten_check
+  check (weitere_sparten <@ array['garten', 'strasse', 'tief']::text[] and cardinality(weitere_sparten) <= 2);
+
 -- Wer hat die Meldung abgeschickt (Defekt, wartet): setzt der Trigger machines_stamp, nicht die Seite
 alter table public.machines add column if not exists reported_by   uuid;
 alter table public.machines add column if not exists reported_name text not null default '';
@@ -166,6 +173,28 @@ drop trigger if exists needs_guard_trg on public.needs;
 create trigger needs_guard_trg
   before update on public.needs
   for each row execute function public.needs_guard();
+
+-- Weitere Sparten ordnen: ohne Doppelte, ohne die Hauptsparte, feste Reihenfolge (garten, strasse, tief).
+-- Unbekannte Werte bleiben stehen, damit die Prüfung sie ablehnt (nichts wird still verschluckt).
+create or replace function public.sites_sparten()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.weitere_sparten := coalesce(array(
+    select x from (select distinct x from unnest(coalesce(new.weitere_sparten, '{}'::text[])) as u(x)
+                   where x is distinct from new.sparte) d
+    order by coalesce(array_position(array['garten', 'strasse', 'tief']::text[], x), 99), x
+  ), '{}'::text[]);
+  return new;
+end;
+$$;
+
+drop trigger if exists sites_sparten_trg on public.sites;
+create trigger sites_sparten_trg
+  before insert or update on public.sites
+  for each row execute function public.sites_sparten();
 
 -- Absender und Zeit einer Meldung setzt die Datenbank, nie die Seite.
 -- Neue Meldung (Status oder Grund ändert sich auf wartet/defekt): aktuelle Person und Zeit.

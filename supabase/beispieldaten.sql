@@ -2,12 +2,12 @@
 -- Nur ausführen, wenn du sie zum Ausprobieren willst. Alle Namen sind erfunden.
 -- Später kannst du sie im Dashboard als Admin löschen.
 
-insert into public.sites (name, sparte, lat, lng) values
-  ('Birkenweg', 'garten', 47.2300, 8.8420),
-  ('Umfahrung Nord', 'strasse', 47.2560, 8.8480),
-  ('Kanal Bahnhofstr.', 'tief', 47.2258, 8.8212),
-  ('Park Seeblick', 'garten', 47.2335, 8.8185),
-  ('Kreisel Eschenbach', 'strasse', 47.2406, 8.9221);
+insert into public.sites (name, sparte, weitere_sparten, lat, lng) values
+  ('Birkenweg', 'garten', '{}', 47.2300, 8.8420),
+  ('Umfahrung Nord', 'strasse', '{}', 47.2560, 8.8480),
+  ('Kanal Bahnhofstr.', 'tief', '{strasse}', 47.2258, 8.8212),   -- Tiefbau und Strassenbau zusammen
+  ('Park Seeblick', 'garten', '{}', 47.2335, 8.8185),
+  ('Kreisel Eschenbach', 'strasse', '{}', 47.2406, 8.9221);
 
 insert into public.machines (name, typ, sparte, site_id, status) values
   ('Bagger 1',      'Bagger',     'tief',    (select id from public.sites where name = 'Kanal Bahnhofstr.'), 'running'),

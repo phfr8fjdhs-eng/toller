@@ -286,6 +286,26 @@ $P -f "$ROOT/supabase/schema.sql" >/dev/null 2>&1
 expect_eq "Verlauf: schema.sql holt den offenen Eintrag nach, und nur einmal (auch nach zweitem Lauf)" "1" "$($P -c "select count(*) from public.downtimes where machine_name='Vorher schon kaputt' and ended_at is null")"
 expect_eq "Verlauf: offene Einträge stimmen genau mit den gestörten Maschinen überein" "t" "$($P -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
 
+# ---------------------------------------------------------------- Mehrere Sparten pro Baustelle
+echo
+echo "=== Mehrere Sparten pro Baustelle ==="
+out=$(as_user $U3 "insert into public.sites(name,sparte,weitere_sparten,lat,lng) values ('Gemischt','tief','{strasse,tief,strasse,garten}',47.23,8.83) returning weitere_sparten;")
+expect_eq "Weitere Sparten: Hauptsparte und Doppelte fallen weg, feste Reihenfolge" "{garten,strasse}" "$(echo "$out" | tail -1)"
+MIX=$($P -c "select id from public.sites where name='Gemischt'")
+out=$(as_user $U3 "insert into public.sites(name,sparte,weitere_sparten,lat,lng) values ('Falsch','tief','{hochbau}',47.23,8.83);")
+expect "Weitere Sparten: unbekannte Sparte wird abgelehnt (nicht still verschluckt)" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.sites(name,sparte,weitere_sparten,lat,lng) values ('Leer','strasse',null,47.23,8.83) returning weitere_sparten;")
+expect_eq "Weitere Sparten: ohne Angabe leer" "{}" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "insert into public.sites(name,sparte,lat,lng) values ('Wie bisher','garten',47.23,8.83) returning weitere_sparten;")
+expect_eq "Weitere Sparten: Anlegen wie bisher (ohne Feld) geht weiter" "{}" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "update public.sites set weitere_sparten='{garten}' where id='$MIX' returning weitere_sparten;")
+expect_eq "Weitere Sparten: freigegebener Mitarbeiter ändert die Sparten" "{garten}" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "update public.sites set sparte='garten' where id='$MIX' returning sparte||' '||weitere_sparten::text;")
+expect_eq "Weitere Sparten: neue Hauptsparte fällt aus den weiteren Sparten weg" "garten {}" "$(echo "$out" | tail -1)"
+out=$(as_user $U2 "update public.sites set weitere_sparten='{tief}' where id='$MIX' returning id;")
+expect_not "Weitere Sparten: nicht freigegebene Person kann nichts ändern" "$MIX" "$out"
+expect_eq "Weitere Sparten: Wert ist danach unverändert" "{}" "$($P -c "select weitere_sparten from public.sites where id='$MIX'")"
+
 # ---------------------------------------------------------------- Update einer bestehenden (alten) Datenbank
 echo
 echo "=== Update einer alten Datenbank (mit Prozent-Spalten) ==="
@@ -301,6 +321,7 @@ expect_eq "Update: Tabelle needs ist da" "t" "$($PA -c "select to_regclass('publ
 expect_eq "Update: Tabelle materials ist da" "t" "$($PA -c "select to_regclass('public.materials') is not null")"
 expect_eq "Update: Tabelle downtimes ist da, offene Einträge stimmen mit den gestörten Maschinen überein" "t" "$($PA -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
 expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"
+expect_eq "Update: Spalte weitere_sparten ist an sites ergänzt, alte Baustellen haben keine weiteren Sparten" "1 true" "$($PA -c "select (select count(*) from information_schema.columns where table_schema='public' and table_name='sites' and column_name='weitere_sparten')||' '||(select bool_and(weitere_sparten = '{}') from public.sites)")"
 expect_eq "Update: alte Daten sind unverändert" "5 Baustellen, 13 Maschinen" "$($PA -c "select (select count(*) from sites)||' Baustellen, '||(select count(*) from machines)||' Maschinen'")"
 out=$($PA -c "insert into public.sites(name,sparte,lat,lng) values ('Ohne Prozent','tief',47.2,8.8) returning name;" 2>&1)
 expect "Update: Baustelle ohne Material-Spalten anlegen geht weiter" "Ohne Prozent" "$out"

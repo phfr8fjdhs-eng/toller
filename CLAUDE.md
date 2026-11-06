@@ -9,7 +9,7 @@ und was fehlt (Material oder Diesel als Meldung an der Maschine, alles andere al
 Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 
 ## Begriffe
-- **Sparte:** `garten` (Gartenbau), `strasse` (Strassenbau), `tief` (Tiefbau)
+- **Sparte:** `garten` (Gartenbau), `strasse` (Strassenbau), `tief` (Tiefbau). Eine Baustelle hat eine **Hauptsparte** (bestimmt den Boden in Szene und 3D) und beliebig viele **weitere Sparten** (z. B. Strassenbau + Tiefbau). Anzeige als Buchstaben `S T`, Hauptsparte zuerst. Der Filter zeigt eine Baustelle, wenn eine ihrer Sparten gewählt ist (`showSite`). Eine Maschine hat genau eine Sparte
 - **Baustelle:** Ort auf der Karte mit Maschinen und einer Bedarfsliste
 - **Materialmeldung:** Tipp auf "Material fehlt" an einer Maschine öffnet eine Auswahl aus dem Katalog (`public/materialien.js`, über 450 übliche Bezeichnungen mit Suche und Kategorie). Jede freigegebene Person darf zusätzlich ein eigenes Material eintippen, es wird in `materials` gespeichert und steht allen zur Auswahl. Dazu ein freies Feld für Menge oder Hinweis (nie Prozent). Grund der Maschine: `Material fehlt: Kies 0/32` oder `Material fehlt: Kies 0/32 · ca. 20 m³`
 - **Absender:** Bei jeder Meldung (Defekt, Material fehlt, Diesel fehlt) steht, wer sie abgeschickt hat und wann. Name und Zeit setzt die Datenbank (Trigger `machines_stamp`), nicht die Seite
@@ -38,7 +38,7 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 
 ## Datenmodell (Datenbank)
 - `profiles`: `id`, `email`, `name`, `role` (`admin` oder `mitarbeiter`), `approved`
-- `sites` (Baustellen): `id`, `name`, `sparte`, `lat`, `lng`
+- `sites` (Baustellen): `id`, `name`, `sparte` (Hauptsparte), `weitere_sparten` (text[], nur `garten`/`strasse`/`tief`, der Trigger `sites_sparten` entfernt Doppelte und die Hauptsparte und ordnet), `lat`, `lng`. In der Seite: `extra`, Hilfen `spartenOf`, `spartenTag`, `spartenText`. Ändern über "Sparten ändern" in der Detailansicht (`modalSparten`, alle Freigegebenen). Fehlt die Spalte (schema.sql nicht erneut ausgeführt), läuft alles mit der Hauptsparte weiter und zeigt einen Hinweis (`spartenOk`)
 - `machines`: `id`, `name`, `typ`, `sparte`, `site_id` (leer = Werkhof), `status` (`running`, `waiting`, `broken`, `off`), `reason` (bei `waiting`: `Material fehlt: <Material>` mit optionalem ` · <Hinweis>`, oder `Diesel fehlt`), `reported_by`, `reported_name`, `reported_at` (Absender und Zeit der Meldung, nur vom Trigger `machines_stamp` gesetzt: neue Meldung = aktuelle Person, läuft wieder oder Werkhof = leer, sonst unverändert)
 - `materials` (eigene Materialien der Mitarbeiter, zusätzlich zum Katalog in `materialien.js`): `id`, `name` (2 bis 60 Zeichen, eindeutig ohne Gross/Klein), `author` (setzt der Trigger `materials_stamp`), `created_by`, `created_at`. Freigegebene lesen und schreiben, nichts ändern, löschen dürfen der Schreiber und Admins
 - `needs` (Bedarf): `id`, `site_id`, `text`, `created_by`, `created_at`, `done`, `done_by`. Freigegebene lesen, schreiben und haken ab (ein Trigger `needs_guard` lässt Nicht-Admins nur `done` und `done_by` ändern), löschen dürfen der Schreiber und Admins
@@ -51,7 +51,7 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 
 ## Regeln
 - Status-Farben immer gleich: grün = läuft, gelb = wartet (Material oder Diesel fehlt), rot blinkend = kaputt, grau = im Werkhof
-- Sparten nie mit Status-Farben markieren: Sparte nur als Buchstaben-Tag (G, S, T)
+- Sparten nie mit Status-Farben markieren: Sparte nur als Buchstaben-Tag (G, S, T, bei mehreren z. B. `S T`)
 - Eine Baustelle zeigt immer den schlechtesten Status ihrer Maschinen
 - **Kein Ton, nie.** Eine neue Störung (Wechsel auf `broken`) wird einmal gezählt und als Banner und rot blinkende Maschine gezeigt, auch bei Störungen von anderen Handys
 - Sicherheit liegt in der Datenbank (Row Level Security in `schema.sql`), nicht in der Seite. Die Seite blendet nur Knöpfe aus. Jede Änderung an Tabellen braucht passende Regeln und einen Test

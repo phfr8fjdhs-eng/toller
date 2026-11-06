@@ -1,3 +1,4 @@
+import re
 import os
 from playwright.sync_api import sync_playwright
 import json
@@ -71,6 +72,11 @@ with sync_playwright() as p:
     check("Filter: alle drei gewaehlt = Alle", d.locator("#siteList .item").count() == 5 and d.locator('#filters [data-f="all"].active').count() == 1)
     d.click('#filters [data-f="tief"]'); d.click('#filters [data-f="all"]')
     check("Filter: Alle setzt zurueck", d.locator("#siteList .item").count() == 5 and d.locator("#filters button.active").count() == 1)
+    # Mehrere Sparten: Kreisel Eschenbach ist Strassenbau und Tiefbau
+    check("Sparten: Baustelle mit zwei Sparten zeigt beide Buchstaben", d.locator("#siteList .item", has_text="Kreisel Eschenbach").locator(".tag").inner_text() == "S T")
+    d.click('#filters [data-f="tief"]')
+    check("Sparten: Filter Tiefbau findet auch die Baustelle, bei der Tiefbau nur dabei ist", sorted(d.locator("#siteList .item").all_inner_texts()) == sorted(["T\nKanal Bahnhofstr.", "S T\nKreisel Eschenbach"]) or (d.locator("#siteList .item").count() == 2 and d.locator("#siteList .item", has_text="Kreisel Eschenbach").count() == 1), str(d.locator("#siteList .item").all_inner_texts()))
+    d.click('#filters [data-f="all"]')
     d.click("#failBtn")
     check("Demo: Stoerung -> Banner", d.locator("#banner.show").count() == 1)
     check("Demo: Stoerung wird einmal gezaehlt", d.evaluate("incidents") == 1, str(d.evaluate("incidents")))
@@ -187,6 +193,21 @@ with sync_playwright() as p:
     d.locator('#detail .mrow', has_text="Dumper 1").locator('button:has-text("Nachgeliefert")').click(); d.wait_for_timeout(200)
     check("Demo Material: danach laufen beide", d.evaluate("machines.find(m => m.id === 3).status") == "running" and "gemeldet von" not in d.inner_text("#detail"))
     d.screenshot(path="/tmp/" + os.path.basename(DIR + "/app_demo.png"), full_page=False)
+    # Mehrere Sparten beim Anlegen und spaeter aendern
+    d.click("#addSiteBtn"); d.fill("#f-name", "Mischbaustelle"); d.select_option("#f-sparte", "garten")
+    check("Sparten: Hauptsparte steht nicht nochmals bei 'Auch dabei'", not d.locator("#f-sp-garten").is_visible() and d.locator("#f-sp-strasse").is_visible() and d.locator("#f-sp-tief").is_visible())
+    d.click("#f-sp-strasse"); d.select_option("#f-sparte", "strasse")
+    check("Sparten: neue Hauptsparte wird bei 'Auch dabei' ausgeblendet und abgewaehlt", not d.locator("#f-sp-strasse").is_visible() and not d.locator("#f-sp-strasse").is_checked())
+    d.click("#f-sp-garten")
+    d.fill("#f-lat", "47.25"); d.fill("#f-lng", "8.86"); d.click("text=Baustelle speichern"); d.wait_for_timeout(100)
+    mix = d.evaluate("(()=>{ const s = sites.find(x => x.name === 'Mischbaustelle'); return { sparte:s.sparte, extra:s.extra }; })()")
+    check("Sparten: neue Baustelle mit Hauptsparte und weiterer Sparte", mix == {"sparte": "strasse", "extra": ["garten"]}, str(mix))
+    check("Sparten: Detail nennt beide Sparten", "Strassenbau + Gartenbau" in d.inner_text("#detail"))
+    d.click("#spartenBtn"); d.click("#f-sp-tief"); d.click("#spSave"); d.wait_for_timeout(100)
+    check("Sparten: aendern fuegt Tiefbau dazu, Liste zeigt S G T", d.locator("#siteList .item", has_text="Mischbaustelle").locator(".tag").inner_text() == "S G T" and "Sparten geändert: Mischbaustelle" in d.inner_text("#log"))
+    d.click("#spartenBtn")
+    check("Sparten: Kaestchen nicht in einem anderen Label verschachtelt (Antippen trifft das richtige)", d.evaluate("document.querySelectorAll('#modal label label').length") == 0)
+    d.click("#modal >> text=Schliessen")
     # Die Vorfuehrung meldet selbst: Absender ist "Simulation", nie eine echte Person, und es ist ein Material aus dem Katalog
     sim = new_page(b, False); sim.goto(URL + "?modus=leicht"); sim.wait_for_timeout(500)
     sim.evaluate("Math.random = () => 0.004; tick(); Math.random = () => 0.5;")
@@ -215,7 +236,7 @@ with sync_playwright() as p:
 
     # Baustelle ueber Adresssuche
     pg.click("#addSiteBtn")
-    pg.fill("#f-name", "Kanal Jona"); pg.select_option("#f-sparte", "tief")
+    pg.fill("#f-name", "Kanal Jona"); pg.select_option("#f-sparte", "tief"); pg.click("#f-sp-strasse")
     pg.fill("#f-addr", "Bahnhofstrasse Jona"); pg.click("#modal >> text=Suchen"); pg.wait_for_timeout(300)
     check("Live: Adresssuche zeigt Treffer ohne HTML-Tags", pg.locator("#modal .results button").count() == 1 and "<b>" not in pg.inner_text("#modal .results"))
     pg.click("#modal .results button")
@@ -223,6 +244,11 @@ with sync_playwright() as p:
     pg.click("text=Baustelle speichern"); pg.wait_for_timeout(300)
     check("Live: Baustelle in Datenbank", len(pg.evaluate("window.__db.sites")) == 1)
     check("Live: Baustelle in Liste", pg.locator("#siteList .item", has_text="Kanal Jona").count() == 1)
+    check("Live: weitere Sparte wird gespeichert", pg.evaluate("window.__db.sites[0].weitere_sparten") == ["strasse"] and pg.locator("#siteList .item", has_text="Kanal Jona").locator(".tag").inner_text() == "T S")
+    pg.click("#spartenBtn"); pg.click("#f-sp-strasse"); pg.click("#spSave"); pg.wait_for_timeout(300)
+    check("Live: Sparten aendern schreibt in die Datenbank", pg.evaluate("window.__db.sites[0].weitere_sparten") == [] and pg.locator("#siteList .item", has_text="Kanal Jona").locator(".tag").inner_text() == "T")
+    pg.evaluate("((id)=>{const r=window.__db.sites.find(x=>x.id===id); const old=Object.assign({},r); r.weitere_sparten=['garten']; window.__db.emit('sites','UPDATE',r,old);})(window.__db.sites[0].id)"); pg.wait_for_timeout(300)
+    check("Live: Sparten von einem anderen Handy erscheinen per Echtzeit", pg.locator("#siteList .item", has_text="Kanal Jona").locator(".tag").inner_text() == "T G")
 
     # Baustelle ueber Kartenklick
     pg.click("#addSiteBtn"); pg.fill("#f-name", "Park Nord")
@@ -570,6 +596,16 @@ with sync_playwright() as p:
     # ============================================================ PASSWORT VERGESSEN
     print("=== PASSWORT VERGESSEN ===")
     SEED = "(()=>{const d=window.__db; d.users['chef@firma.test']={id:'u1',email:'chef@firma.test',password:'altes-passwort'}; d.profiles.push({id:'u1',email:'chef@firma.test',name:'Chef',role:'admin',approved:true}); d.sites.push({id:'a',name:'Testweg',sparte:'tief',lat:47.23,lng:8.83});})();"
+    # Alte Datenbank ohne Spalte weitere_sparten: alles geht weiter, nur die Hauptsparte, mit Hinweis
+    oc = new_page(b, True); oc.add_init_script(SEED + "window.__db.session={user:{id:'u1',email:'chef@firma.test'}}; window.__db.noSpartenCol=true;")
+    oc.goto(URL + "?modus=leicht"); oc.wait_for_timeout(600)
+    oc.click("#addSiteBtn")
+    check("Alte DB: Formular zeigt Hinweis statt Kaestchen fuer weitere Sparten", "Datenbank-Update" in oc.inner_text("#f-extra") and oc.locator("#f-sp-strasse").count() == 0)
+    oc.fill("#f-name", "Ohne Spalte"); oc.select_option("#f-sparte", "garten"); oc.fill("#f-lat", "47.24"); oc.fill("#f-lng", "8.84")
+    oc.click("text=Baustelle speichern"); oc.wait_for_timeout(300)
+    check("Alte DB: Baustelle wird trotzdem gespeichert (nur Hauptsparte)", oc.evaluate("window.__db.sites.some(s => s.name === 'Ohne Spalte' && s.sparte === 'garten' && !('weitere_sparten' in s))") and oc.locator("#modal").count() == 0)
+    oc.click("#spartenBtn"); oc.select_option("#f-sparte", "tief"); oc.click("#spSave"); oc.wait_for_timeout(300)
+    check("Alte DB: Hauptsparte aendern geht weiter", oc.evaluate("window.__db.sites.find(s => s.name === 'Ohne Spalte').sparte") == "tief" and oc.locator("#modal").count() == 0)
     pv = new_page(b, True); pv.add_init_script(SEED); pv.goto(URL + "?modus=leicht"); pv.wait_for_timeout(600)
     check("Passwort: im Login steht 'Passwort vergessen?' (grosser Knopf)", pv.locator("#forgotBtn").is_visible() and pv.evaluate("document.querySelector('#forgotBtn').getBoundingClientRect().height") >= 40)
     pv.fill("#aMail", "chef@firma.test"); pv.click("#forgotBtn")
@@ -694,7 +730,7 @@ with sync_playwright() as p:
     col = {}
     for x in ms: col.setdefault(x["status"], set()).add(x["color"])
     check("Karte: gleiche Statusfarbe fuer gleichen Status, unabhaengig von der Sparte", all(len(v) == 1 for v in col.values()), str(col))
-    check("Karte: Sparte nur als Buchstabe in der Schrift", all(x["depot"] or x["label"][:4] in ("G · ", "S · ", "T · ") for x in ms), str([x["label"] for x in ms]))
+    check("Karte: Sparte nur als Buchstabe in der Schrift", all(x["depot"] or re.match(r"^[GST]( [GST])* · ", x["label"]) for x in ms), str([x["label"] for x in ms]))
     check("Karte: keine Prozentzahl an den Baustellen", not any("%" in x["sub"] for x in ms))
     birk = next(x["id"] for x in ms if x["label"].endswith("Birkenweg"))
     m.evaluate("id => __mapClickSite(id)", birk); m.wait_for_timeout(200)

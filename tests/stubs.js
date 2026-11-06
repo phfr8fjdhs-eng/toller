@@ -109,7 +109,7 @@
 
   function Q(t){ this.t = t; this.op = "select"; this.fl = []; this.row = null; this.one = false; this.maybe = false; this.sel = false; this.ord = null; this.lim = null; }
   Q.prototype = {
-    select(){ this.sel = true; return this; },
+    select(cols){ this.sel = true; this.cols = cols || "*"; return this; },
     insert(r){ this.op = "insert"; this.row = r; return this; },
     update(r){ this.op = "update"; this.row = r; return this; },
     delete(){ this.op = "delete"; return this; },
@@ -123,6 +123,12 @@
     then(res, rej){ return Promise.resolve().then(() => this.run()).then(res, rej); },
     run(){
       if(db.failNext && db.failNext.table === this.t){ const e = db.failNext.msg; db.failNext = null; return { data:null, error:{ message:e } }; }
+      // Alte Datenbank ohne Spalte weitere_sparten (schema.sql noch nicht erneut ausgefuehrt)
+      if(db.noSpartenCol && this.t === "sites"){
+        const colErr = { data:null, error:{ code:"42703", message:"column sites.weitere_sparten does not exist" } };
+        if(this.op === "select" && /weitere_sparten/.test(this.cols || "")) return colErr;
+        if((this.op === "insert" || this.op === "update") && this.row && "weitere_sparten" in this.row) return colErr;
+      }
       const T = db[this.t];
       const isProf = this.t === "profiles";
       const canRead = isProf ? (r => admin() || (me() && r.id === me().id)) : (() => approved());
@@ -150,6 +156,7 @@
         if(isProf ? !admin() : !approved()) return { data:[], error:null };
         if(this.t === "materials") return { data:[], error:null };           // Materialien lassen sich nicht aendern
         rows.forEach(r => { const old = Object.assign({}, r); Object.assign(r, this.row); if(this.t === "machines"){ stamp(r, old); track(r, old, "update"); } emit(this.t, "UPDATE", r, old); });
+        if(this.one) return rows.length === 1 ? { data:rows[0], error:null } : { data:null, error:{ message:"JSON object requested, multiple (or no) rows returned" } };
         return { data:rows, error:null };
       }
       if(this.op === "delete"){

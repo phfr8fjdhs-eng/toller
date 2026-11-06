@@ -152,6 +152,11 @@
   .cardhead h2{margin:0;font-size:17px}
   .form{display:flex;flex-direction:column;gap:12px}
   .form label{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}
+  .form .fld{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}
+  .spExtra{display:flex;flex-wrap:wrap;gap:8px}
+  .form label.spCb{flex-direction:row;align-items:center;gap:8px;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:8px;color:var(--text);cursor:pointer}
+  .form label.spCb[hidden]{display:none}
+  .spCb input{width:20px;height:20px;margin:0}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .row2>*{min-width:0}
   .msg{min-height:18px;font-size:13px}
@@ -378,7 +383,7 @@ function loadDemo(){
     { id:"s2", name:"Umfahrung Nord",    sparte:"strasse",x:55, y:18, lat:47.2560, lng:8.8480 },
     { id:"s3", name:"Kanal Bahnhofstr.", sparte:"tief",x:38, y:52, lat:47.2258, lng:8.8212 },
     { id:"s4", name:"Park Seeblick",     sparte:"garten",x:82, y:46, lat:47.2335, lng:8.8185 },
-    { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse",x:18, y:76, lat:47.2406, lng:8.9221 }
+    { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse",extra:["tief"],x:18, y:76, lat:47.2406, lng:8.9221 }
   ];
   const M = (id,name,typ,sparte,site,status) => ({ id, name, typ, sparte, site, status, reason:"" });
   machines = [
@@ -549,7 +554,15 @@ function deploy(m, siteId){
 }
 
 /* =============================================================== Daten: Anlegen und Löschen */
-const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, lat:r.lat, lng:r.lng });
+const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, lat:r.lat, lng:r.lng,
+  extra:(Array.isArray(r.weitere_sparten) ? r.weitere_sparten : []).filter(k => SPARTEN[k] && k !== r.sparte) });
+// Alle Sparten einer Baustelle: zuerst die Hauptsparte (bestimmt den Boden in Szene und 3D), dann die weiteren
+const spartenOf = s => s && s.sparte ? [s.sparte].concat((s.extra || []).filter(k => k !== s.sparte)) : [];
+const spartenTag = s => spartenOf(s).map(k => TAG[k]).join(" ");
+const spartenText = s => spartenOf(s).map(k => SPARTEN[k]).join(" + ");
+// Eine Baustelle ist sichtbar, wenn eine ihrer Sparten im Filter gewählt ist
+const showSite = s => spartenOf(s).some(showSparte);
+let spartenOk = true;  // false, wenn die Datenbank die Spalte weitere_sparten noch nicht hat (schema.sql erneut ausführen)
 const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "", by:r.reported_name || "", at:r.reported_at || null });
 
 const mapNeed = r => ({ id:r.id, site:r.site_id, text:r.text, author:r.author || "", createdBy:r.created_by, createdAt:r.created_at, done:!!r.done, doneBy:r.done_by || "" });
@@ -605,16 +618,72 @@ function upsertMachine(m){
 async function createSite(v){
   let s;
   if(!LIVE){
-    s = { id:"n" + (++localId), name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng };
+    s = { id:"n" + (++localId), name:v.name, sparte:v.sparte, extra:(v.extra || []).slice(), lat:v.lat, lng:v.lng };
     sites.push(s); selectSite(s.id); addLog("Neue Baustelle: " + s.name);
   }else{
-    const r = await sb.from("sites").insert({ name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng }).select().single();
+    const row = { name:v.name, sparte:v.sparte, lat:v.lat, lng:v.lng };
+    const extra = (v.extra || []).filter(k => k !== v.sparte);
+    if(extra.length && spartenOk) row.weitere_sparten = extra;
+    const r = await sb.from("sites").insert(row).select().single();
     if(r.error){ toast("Baustelle konnte nicht gespeichert werden: " + r.error.message, true); return false; }
+    if(extra.length && !spartenOk) toast("Weitere Sparten nicht gespeichert: Datenbank-Update nötig (schema.sql erneut ausführen).", true);
     s = mapSite(r.data);
     upsertSite(s); selectSite(r.data.id); addLog("Neue Baustelle: " + r.data.name);
   }
   if(v.needs && v.needs.length) await addNeeds(s, v.needs);
   return true;
+}
+
+// Sparten einer Baustelle ändern (alle Freigegebenen, wie Anlegen)
+async function setSiteSparten(s, sparte, extra){
+  extra = extra.filter(k => k !== sparte);
+  const before = { sparte:s.sparte, extra:(s.extra || []).slice() };
+  s.sparte = sparte; s.extra = extra.slice();
+  render();
+  if(LIVE){
+    const row = { sparte };
+    if(spartenOk) row.weitere_sparten = extra;
+    const r = await sb.from("sites").update(row).eq("id", s.id).select().single();
+    if(r.error){ s.sparte = before.sparte; s.extra = before.extra; render(); toast("Sparten konnten nicht gespeichert werden: " + r.error.message, true); return false; }
+    upsertSite(mapSite(r.data));
+  }
+  addLog("Sparten geändert: " + s.name + " (" + spartenText(s) + ")");
+  render();
+  return true;
+}
+
+// Auswahl der Sparten: eine Hauptsparte und beliebig viele weitere (Mehrfachauswahl)
+function spartenPicker(main, extra){
+  const sel = select([["garten","Gartenbau"],["strasse","Strassenbau"],["tief","Tiefbau"]], main, "f-sparte");
+  const box = el("div", "spExtra"); box.id = "f-extra";
+  const cbs = {};
+  Object.keys(SPARTEN).forEach(k=>{
+    const lab = el("label", "spCb");
+    const cb = el("input"); cb.type = "checkbox"; cb.id = "f-sp-" + k; cb.checked = (extra || []).indexOf(k) >= 0;
+    lab.appendChild(cb); lab.appendChild(el("span", "", SPARTEN[k]));
+    cbs[k] = { lab, cb }; box.appendChild(lab);
+  });
+  const sync = ()=>Object.keys(cbs).forEach(k=>{ const isMain = k === sel.value; cbs[k].lab.hidden = isMain; if(isMain) cbs[k].cb.checked = false; });
+  sel.addEventListener("change", sync); sync();
+  if(LIVE && !spartenOk){ box.innerHTML = ""; box.appendChild(el("div", "empty", "Weitere Sparten brauchen ein Datenbank-Update (schema.sql erneut ausführen).")); }
+  return { sel, box, sync, get:()=>({ sparte:sel.value, extra:Object.keys(cbs).filter(k => k !== sel.value && cbs[k].cb.checked) }) };
+}
+
+function modalSparten(s){
+  const body = el("div", "form");
+  const sp = spartenPicker(s.sparte, s.extra);
+  body.appendChild(field("Hauptsparte", sp.sel));
+  body.appendChild(group("Auch dabei (mehrere möglich)", sp.box));
+  const save = el("button", "primary", "Sparten speichern"); save.type = "button"; save.id = "spSave";
+  save.onclick = async ()=>{
+    const v = sp.get();
+    save.disabled = true;
+    const ok = await setSiteSparten(s, v.sparte, v.extra);
+    save.disabled = false;
+    if(ok) closeModal();
+  };
+  body.appendChild(save);
+  openModal("Sparten: " + s.name, body);
 }
 
 // Mehrere Bedarfszeilen auf einmal (aus einer Offerte): ein Speichern, ein Neuzeichnen
@@ -865,7 +934,7 @@ function marker(s, isDepot){
   const p = pos(s);
   const d = el("div", "site " + st + (isDepot ? " depot" : "") +
     (selected === s.id ? " sel" : "") +
-    (!isDepot && !showSparte(s.sparte) ? " dim" : ""));
+    (!isDepot && !showSite(s) ? " dim" : ""));
   d.style.left = p.x + "%";
   d.style.top = p.y + "%";
 
@@ -873,7 +942,7 @@ function marker(s, isDepot){
   d.appendChild(lazyScene(()=>buildScene(s, ms, isDepot, nOpen), s.id));
 
   const top = el("div", "top");
-  if(s.sparte) top.appendChild(el("span", "tag", TAG[s.sparte]));
+  if(s.sparte) top.appendChild(el("span", "tag", spartenTag(s)));
   top.appendChild(el("span", "nm", s.name));
   if(nOpen){ const b = el("span", "badge", String(nOpen)); b.title = nOpen + (nOpen === 1 ? " offener Bedarf" : " offene Bedarfe"); top.appendChild(b); }
   d.appendChild(top);
@@ -931,12 +1000,12 @@ function renderNeedsAll(){
   const box = $("needsAll");
   box.innerHTML = "";
   if(LIVE && !needsOk){ box.appendChild(el("div", "empty", "Datenbank-Update nötig (schema.sql erneut ausführen).")); return; }
-  const list = needs.filter(n => !n.done).filter(n => { const s = findSite(n.site); return s && showSparte(s.sparte); });
+  const list = needs.filter(n => !n.done).filter(n => { const s = findSite(n.site); return s && showSite(s); });
   if(!list.length){ box.appendChild(el("div", "empty", "Nichts offen.")); return; }
   list.slice(0, 40).forEach(n=>{
     const s = findSite(n.site);
     const i = el("div", "item");
-    i.appendChild(el("span", "tag", TAG[s.sparte] || "?"));
+    i.appendChild(el("span", "tag", spartenTag(s) || "?"));
     i.appendChild(el("span", "", s.name + ": " + n.text));
     i.onclick = ()=>selectSite(n.site);
     box.appendChild(i);
@@ -958,10 +1027,15 @@ function renderDetail(){
   if(!s){ box.appendChild(el("div", "empty", "Wähle eine Baustelle in der Liste oder auf der Karte.")); return; }
 
   const head = el("div", "dhead");
-  if(s.sparte) head.appendChild(el("span", "tag", TAG[s.sparte]));
+  if(s.sparte) head.appendChild(el("span", "tag", spartenTag(s)));
   head.appendChild(el("strong", "", s.name));
-  if(s.sparte) head.appendChild(el("span", "muted", SPARTEN[s.sparte]));
+  if(s.sparte) head.appendChild(el("span", "muted", spartenText(s)));
   box.appendChild(head);
+  if(s.id !== "depot"){
+    const spb = el("button", "", "Sparten ändern"); spb.id = "spartenBtn"; spb.type = "button";
+    spb.onclick = ()=>modalSparten(s);
+    box.appendChild(spb);
+  }
 
   if(MODE === "3d"){                                           // 3D-Ansicht gibt es nur im Modus 3D (Computer)
     const b3 = el("button", "open3d", "3D-Ansicht");
@@ -1028,7 +1102,7 @@ function renderList(){
   const box = $("siteList");
   const q = $("siteSearch").value.trim().toLowerCase();
   box.innerHTML = "";
-  let list = sites.filter(s => showSparte(s.sparte) && (!q || s.name.toLowerCase().indexOf(q) >= 0));
+  let list = sites.filter(s => showSite(s) && (!q || s.name.toLowerCase().indexOf(q) >= 0));
   list.sort((a, b) => RANK[siteStatus(a)] - RANK[siteStatus(b)] || a.name.localeCompare(b.name, "de"));
   if(!list.length){
     box.appendChild(el("div", "empty", sites.length ? "Keine Baustelle gefunden." : (LIVE ? "Noch keine Baustellen." : "")));
@@ -1037,7 +1111,7 @@ function renderList(){
   list.slice(0, 100).forEach(s=>{
     const i = el("div", "item" + (selected === s.id ? " sel" : ""));
     i.appendChild(el("span", "dot " + siteStatus(s)));
-    i.appendChild(el("span", "tag", TAG[s.sparte]));
+    i.appendChild(el("span", "tag", spartenTag(s)));
     i.appendChild(el("span", "", s.name));
     i.onclick = ()=>selectSite(s.id);
     box.appendChild(i);
@@ -1411,7 +1485,7 @@ function fill3D(site){
   v.blinkers.forEach(o => { o.visible = v.lastOn; });
   v.sig = sig3(site);
   v.dirty = true;
-  $("v3Title").textContent = site.name + (site.sparte ? " · " + SPARTEN[site.sparte] : "");
+  $("v3Title").textContent = site.name + (site.sparte ? " · " + spartenText(site) : "");
   $("v3Info").textContent = (r.total === 1 ? "1 Maschine" : r.total + " Maschinen") + (r.total > r.shown ? " (" + r.shown + " davon gezeigt)" : "")
     + (r.open ? " · " + r.open + " Bedarf offen" : "") + ". Ziehen: drehen · Mausrad oder zwei Finger: zoomen · Rechte Maustaste: verschieben";
   return r;
@@ -1575,9 +1649,9 @@ function siteGeo(){
     const nM = machines.filter(m => loc(m) === s.id).length;
     const props = {
       id:s.id, status:st, depot, sel:selected === s.id,
-      dim:!depot && !showSparte(s.sparte),
+      dim:!depot && !showSite(s),
       color:cssVar(STATUS_VAR[st]),
-      label:(s.sparte ? TAG[s.sparte] + " · " : "") + s.name,
+      label:(s.sparte ? spartenTag(s) + " · " : "") + s.name,
       sub:(depot ? "" : SHORT[st] + " · ") + nM + (nM === 1 ? " Maschine" : " Maschinen") + (nOpen ? " · " + nOpen + " Bedarf" : "")
     };
     areas.push({ type:"Feature", properties:props, geometry:{ type:"Polygon", coordinates:[circleRing(s.lng, s.lat, SITE_R)] } });
@@ -1898,6 +1972,10 @@ function openModal(title, body, wide){
 function field(label, input){
   const l = el("label"); l.appendChild(el("span", "", label)); l.appendChild(input); return l;
 }
+// Wie field, aber ohne <label> aussen herum (für Gruppen mit eigenen Kästchen, Labels dürfen nicht verschachtelt sein)
+function group(label, content){
+  const g = el("div", "fld"); g.appendChild(el("span", "", label)); g.appendChild(content); return g;
+}
 function input(type, value, id){
   const i = el("input"); i.type = type; i.value = value === undefined ? "" : value; if(id) i.id = id; i.autocomplete = "off"; return i;
 }
@@ -2095,10 +2173,11 @@ function parseOffer(text){
 }
 
 function modalSite(draft){
-  draft = draft || { name:"", sparte:"tief", lat:"", lng:"", needsAll:[] };
+  draft = draft || { name:"", sparte:"tief", extra:[], lat:"", lng:"", needsAll:[] };
   const body = el("div", "form");
   const name = input("text", draft.name, "f-name"); name.maxLength = 80;
-  const sparte = select([["garten","Gartenbau"],["strasse","Strassenbau"],["tief","Tiefbau"]], draft.sparte, "f-sparte");
+  const sp = spartenPicker(draft.sparte, draft.extra);
+  const sparte = sp.sel;
   const lat = input("text", draft.lat, "f-lat"); lat.inputMode = "decimal";
   const lng = input("text", draft.lng, "f-lng"); lng.inputMode = "decimal";
   // Bedarfszeilen aus einer Offerte: Häkchen und Text je Zeile, der Admin darf abwählen und ändern
@@ -2134,7 +2213,7 @@ function modalSite(draft){
       if(p.name && (p.nameSure || !name.value.trim())){ name.value = p.name; found.push("Name"); }
       else if(p.name) found.push("Name bleibt wie getippt");
       else missing.push("Name");
-      if(p.sparte){ sparte.value = p.sparte; found.push("Sparte"); } else missing.push("Sparte");
+      if(p.sparte){ sparte.value = p.sparte; sp.sync(); found.push("Sparte"); } else missing.push("Sparte");
       drawNeeds(p.needs.map(t => ({ t, on:true })));
       if(p.needs.length) found.push(p.needs.length + (p.needs.length === 1 ? " Bedarfszeile" : " Bedarfszeilen")); else missing.push("Bedarf (keine Mengen erkannt)");
       altBox.innerHTML = ""; results.innerHTML = "";
@@ -2152,7 +2231,8 @@ function modalSite(draft){
   }
 
   body.appendChild(field("Name der Baustelle", name));
-  body.appendChild(field("Sparte", sparte));
+  body.appendChild(field("Hauptsparte", sparte));
+  body.appendChild(group("Auch dabei (mehrere möglich)", sp.box));
   drawNeeds(draft.needsAll || []); body.appendChild(needsBox);
 
   body.appendChild(el("div", "sub", "Ort"));
@@ -2194,7 +2274,7 @@ function modalSite(draft){
   r2.appendChild(field("Breitengrad", lat)); r2.appendChild(field("Längengrad", lng));
   body.appendChild(r2);
 
-  const collect = ()=>({ name:name.value, sparte:sparte.value, lat:lat.value, lng:lng.value, needsAll:needRows.map(r => ({ t:r.inp.value, on:r.cb.checked })) });
+  const collect = ()=>({ name:name.value, sparte:sparte.value, extra:sp.get().extra, lat:lat.value, lng:lng.value, needsAll:needRows.map(r => ({ t:r.inp.value, on:r.cb.checked })) });
   if(lmap && mapReady){
     const pick = el("button", "", "Ort auf der Karte wählen"); pick.type = "button";
     pick.onclick = ()=>{
@@ -2220,7 +2300,7 @@ function modalSite(draft){
       msg.textContent = "Bitte einen gültigen Ort wählen (Adresse suchen, Karte antippen oder Koordinaten eintragen)."; return;
     }
     save.disabled = true;
-    const ok = await createSite({ name:nm, sparte:v.sparte, lat:la, lng:ln, needs:needRows.filter(r => r.cb.checked).map(r => r.inp.value) });
+    const ok = await createSite({ name:nm, sparte:v.sparte, extra:v.extra, lat:la, lng:ln, needs:needRows.filter(r => r.cb.checked).map(r => r.inp.value) });
     save.disabled = false;
     if(ok) closeModal();
   };
@@ -2399,7 +2479,8 @@ async function loadAll(){
     sb.from("machines").select("*").order("name"),
     sb.from("activity").select("*").order("created_at", { ascending:false }).limit(8),
     sb.from("needs").select("*").order("created_at", { ascending:false }).limit(1000),
-    sb.from("materials").select("*").order("name").limit(1000)
+    sb.from("materials").select("*").order("name").limit(1000),
+    sb.from("sites").select("weitere_sparten").limit(1)
   ]);
   const err = res[0].error || res[1].error || res[2].error;
   if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
@@ -2408,6 +2489,7 @@ async function loadAll(){
   // Fehlt die Tabelle needs (Datenbank noch nicht aktualisiert), läuft alles andere trotzdem
   needsOk = !res[3].error;
   needs = needsOk ? res[3].data.map(mapNeed) : [];
+  spartenOk = !res[5].error;                               // ohne Spalte weitere_sparten: nur die Hauptsparte
   matsOk = !res[4].error;                                  // ohne Tabelle materials gehen Katalog und freie Eingabe trotzdem
   customMats = matsOk ? res[4].data.map(mapMaterial) : [];
   logs.length = 0; seenLog.clear();
