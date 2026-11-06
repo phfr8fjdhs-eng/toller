@@ -148,6 +148,13 @@
   #lmap.compact .site.sel .scene{display:block}
   #lmap.compact .site.sel .info{display:block}
   #lmap.compact .site.sel .dots{display:none}
+  /* Ganz weit herausgezoomt: nur ein kleines Feld in der Statusfarbe, damit man den Ueberblick behaelt */
+  #lmap.mini .site:not(.sel){width:16px;height:16px;max-width:none;padding:0;border-radius:4px;border-width:2px}
+  #lmap.mini .site:not(.sel) .top,#lmap.mini .site:not(.sel) .dots,#lmap.mini .site:not(.sel) .info,#lmap.mini .site:not(.sel) .scene{display:none}
+  #lmap.mini .site.running:not(.sel){background:var(--ok)}
+  #lmap.mini .site.waiting:not(.sel){background:var(--wait)}
+  #lmap.mini .site.broken:not(.sel){background:var(--bad)}
+  #lmap.mini .site.off:not(.sel){background:var(--off)}
   #lmap .maplibregl-canvas{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.95) saturate(.7)}
   .maplibregl-ctrl-attrib{font-size:10px}
   .mapbtns{position:absolute;left:10px;top:10px;z-index:5;display:none;gap:6px}
@@ -1546,7 +1553,9 @@ function fallbackToSketch(){
 
 function updateCompact(){
   if(!lmap) return;
-  $("lmap").classList.toggle("compact", lmap.getZoom() < 12.3 && sites.length > 6);
+  const z = lmap.getZoom();
+  $("lmap").classList.toggle("compact", z < 12.3);   // weit weg: nur Name und Punkte
+  $("lmap").classList.toggle("mini", z < 10.6);      // ganz weit weg: nur ein Feld in der Statusfarbe
 }
 
 async function initRealMap(){
