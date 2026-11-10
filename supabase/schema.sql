@@ -132,6 +132,19 @@ create index if not exists drawings_site_idx on public.drawings(site_id);
 alter table public.drawings add column if not exists seite text not null default 'beide';
 alter table public.drawings drop constraint if exists drawings_seite_check;
 alter table public.drawings add constraint drawings_seite_check check (seite in ('beide', 'links', 'rechts'));
+-- Angaben zu einer Zeichnung, die sich später ändern lassen:
+-- richtung = Fahrtrichtung einer Strasse (beide, hin = in Zeichnungsrichtung, her = dagegen)
+-- zustand  = neu, bestand (bestehend), erneuern (wird erneuert), rueckbau (wird entfernt) oder leer
+-- notiz    = freier Text, z. B. Material, Durchmesser, Tiefe
+alter table public.drawings add column if not exists richtung text not null default 'beide';
+alter table public.drawings add column if not exists zustand text not null default '';
+alter table public.drawings add column if not exists notiz text not null default '';
+alter table public.drawings drop constraint if exists drawings_richtung_check;
+alter table public.drawings add constraint drawings_richtung_check check (richtung in ('beide', 'hin', 'her'));
+alter table public.drawings drop constraint if exists drawings_zustand_check;
+alter table public.drawings add constraint drawings_zustand_check check (zustand in ('', 'neu', 'bestand', 'erneuern', 'rueckbau'));
+alter table public.drawings drop constraint if exists drawings_notiz_check;
+alter table public.drawings add constraint drawings_notiz_check check (length(notiz) <= 200);
 
 -- ---------------------------------------------------------------- Hilfsfunktionen
 
@@ -305,6 +318,12 @@ declare
   who text;
 begin
   new.label := left(regexp_replace(trim(coalesce(new.label, '')), '\s+', ' ', 'g'), 60);
+  new.notiz := left(regexp_replace(trim(coalesce(new.notiz, '')), '\s+', ' ', 'g'), 200);
+  if tg_op = 'UPDATE' then
+    -- Beim Bearbeiten bleiben Baustelle, Zeichner und Zeitpunkt, wie sie waren
+    new.site_id := old.site_id; new.author := old.author; new.created_by := old.created_by; new.created_at := old.created_at;
+    return new;
+  end if;
   select coalesce(nullif(trim(name), ''), email, '') into who from public.profiles where id = auth.uid();
   new.author := left(coalesce(who, ''), 60);
   return new;
@@ -313,7 +332,7 @@ $$;
 
 drop trigger if exists drawings_stamp_trg on public.drawings;
 create trigger drawings_stamp_trg
-  before insert on public.drawings
+  before insert or update on public.drawings
   for each row execute function public.drawings_stamp();
 
 -- Absender und Zeit einer Meldung setzt die Datenbank, nie die Seite.
@@ -482,8 +501,8 @@ drop policy if exists activity_insert on public.activity;
 create policy activity_insert on public.activity
   for insert to authenticated with check (public.is_approved());
 
--- Zeichnungen: Freigegebene lesen und zeichnen (nur als sich selbst), nichts ändern.
--- Löschen darf der Zeichner selbst oder ein Admin.
+-- Zeichnungen: Freigegebene lesen und zeichnen (nur als sich selbst).
+-- Bearbeiten und löschen darf der Zeichner selbst oder ein Admin.
 drop policy if exists drawings_select on public.drawings;
 create policy drawings_select on public.drawings
   for select to authenticated using (public.is_approved());
@@ -491,6 +510,12 @@ create policy drawings_select on public.drawings
 drop policy if exists drawings_insert on public.drawings;
 create policy drawings_insert on public.drawings
   for insert to authenticated with check (public.is_approved() and created_by = auth.uid());
+
+drop policy if exists drawings_update on public.drawings;
+create policy drawings_update on public.drawings
+  for update to authenticated
+  using (public.is_admin() or (public.is_approved() and created_by = auth.uid()))
+  with check (public.is_admin() or (public.is_approved() and created_by = auth.uid()));
 
 drop policy if exists drawings_delete on public.drawings;
 create policy drawings_delete on public.drawings
@@ -583,8 +608,10 @@ revoke execute on function public.is_approved(), public.is_admin() from anon;
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.sites, public.machines, public.needs, public.materials, public.activity to authenticated;
 grant select on public.downtimes to authenticated;
-grant select, insert, delete on public.drawings to authenticated;     -- Zeichnungen werden nie geändert, nur gelöscht und neu gezeichnet
+grant select, insert, delete on public.drawings to authenticated;
 revoke update, truncate on public.drawings from authenticated;
+-- Bearbeiten nur dieser Spalten (Baustelle, Zeichner und Zeit bleiben fest, zusätzlich sichert der Trigger drawings_stamp)
+grant update (kind, geom, label, seite, richtung, zustand, notiz) on public.drawings to authenticated;
 grant execute on function public.is_approved(), public.is_admin() to authenticated;
 
 -- ---------------------------------------------------------------- Echtzeit

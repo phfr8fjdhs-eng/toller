@@ -71,6 +71,7 @@
       this.fitBounds = function(){ window.__fits = (window.__fits || 0) + 1; };
       this.flyTo = function(o){ window.__fly = o.center.join(","); };
       this.getZoom = function(){ return window.__mapZoom || 12; };
+      this.project = function(p){ const q = Array.isArray(p) ? p : [p.lng, p.lat]; return { x:q[0] * 100000, y:-q[1] * 100000 }; };   // etwa 1 Pixel je Meter
       this.setLayoutProperty = function(id, k, v){ if(layers[id]){ layers[id].layout = layers[id].layout || {}; layers[id].layout[k] = v; } };
       this.getBounds = function(){ return { getWest:()=>8.820, getEast:()=>8.823, getNorth:()=>47.227, getSouth:()=>47.225 }; };
       this.remove = function(){};
@@ -205,7 +206,14 @@
       if(this.op === "update"){
         if(isProf ? !admin() : !approved()) return { data:[], error:null };
         if(this.t === "materials") return { data:[], error:null };           // Materialien lassen sich nicht aendern
-        if(this.t === "drawings") return { data:null, error:{ message:"permission denied for table drawings" } };   // nie aendern
+        if(this.t === "drawings"){                                          // wie die Regel drawings_update: Zeichner oder Admin, Geometrie muss passen
+          if(db.noAttrCol) return { data:null, error:{ message:"permission denied for table drawings" } };
+          rows = rows.filter(r => admin() || r.created_by === (me() || {}).id);
+          const okT = { baum:"Point", strasse:"LineString", erneuern:"LineString", wasser:"LineString", abwasser:"LineString", gas:"LineString", strom:"LineString", kabel:"LineString", hecke:"LineString", bereich:"Polygon", rasen:"Polygon", belag:"Polygon" };
+          for(const r of rows){ const k = this.row.kind || r.kind, g = this.row.geom || r.geom; if(g.type !== okT[k]) return { data:null, error:{ message:"new row violates check constraint drawings_geom_ok" } }; }
+          const keep = {}; ["kind", "geom", "label", "seite", "richtung", "zustand", "notiz"].forEach(c => { if(c in this.row) keep[c] = this.row[c]; });
+          this.row = keep;
+        }
         rows.forEach(r => { const old = Object.assign({}, r); Object.assign(r, this.row); if(this.t === "machines"){ stamp(r, old); track(r, old, "update"); } emit(this.t, "UPDATE", r, old); });
         if(this.one) return rows.length === 1 ? { data:rows[0], error:null } : { data:null, error:{ message:"JSON object requested, multiple (or no) rows returned" } };
         return { data:rows, error:null };

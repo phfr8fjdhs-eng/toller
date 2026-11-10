@@ -20,6 +20,7 @@ Solange du das nicht gemacht hast, läuft die Seite im **Demo-Modus** mit erfund
 3. Es sollte "Success" erscheinen. Das Schema lässt sich gefahrlos ein zweites Mal ausführen.
    **Update einer schon eingerichteten Datenbank** (zum Beispiel für den neuen Bedarf auf den Baustellen): `schema.sql` einfach noch einmal ausführen. Bestehende Daten bleiben erhalten.
    Nötig auch für die weiteren Sparten einer Baustelle, für das Zeichnen auf der Karte (neue Tabelle `drawings`) und für "Strasse erneuern, nur eine Seite" (Spalte `seite`).
+   Nötig auch für das Bearbeiten von Zeichnungen und die Angaben Zustand, Fahrtrichtung und Notiz (Spalten `richtung`, `zustand`, `notiz`).
    Solange das nicht gemacht ist, läuft die Seite weiter und zeigt beim Bedarf den Hinweis "Datenbank-Update nötig". Bei "Material fehlt" gehen Katalog und Meldung trotzdem, nur eigene Materialien werden noch nicht für alle gespeichert und der Absender einer Meldung fehlt.
    Wer eine Meldung abgeschickt hat, trägt die Datenbank selbst ein (Name aus dem Profil). Das lässt sich von der Seite aus nicht fälschen.
 4. Optional: Dasselbe mit `supabase/beispieldaten.sql`, wenn du Beispielbaustellen zum Ausprobieren willst.
@@ -102,6 +103,8 @@ alter table public.machines drop column if exists tank;
 | Status ändern, Material oder Diesel fehlt melden | nein | ja | ja |
 | Bedarf auf einer Baustelle schreiben und abhaken | nein | ja | ja |
 | Bedarf löschen | nein | nur eigener | ja |
+| Auf der Karte zeichnen | nein | ja | ja |
+| Zeichnung bearbeiten oder löschen | nein | nur eigene | ja |
 | Eigenes Material in der Auswahl ergänzen | nein | ja | ja |
 | Eigenes Material löschen | nein | nur eigenes | ja |
 | Sehen, wer eine Meldung abgeschickt hat | nein | ja | ja |

@@ -173,9 +173,9 @@
   button.drawkind{display:flex;align-items:center;gap:8px;min-height:44px;text-align:left}
   #drawBar{position:fixed;left:0;right:0;top:0;z-index:70;background:#1f6feb;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   #drawBar #drawText{flex:1 1 260px}
-  #drawSides{display:flex;gap:6px;flex-wrap:wrap}
-  #drawSides[hidden]{display:none}
-  #drawSides button.on{background:#0f1419;color:#fff;border-color:#0f1419}
+  #drawSides,#drawDirs{display:flex;gap:6px;flex-wrap:wrap}
+  #drawSides[hidden],#drawDirs[hidden]{display:none}
+  #drawSides button.on,#drawDirs button.on{background:#0f1419;color:#fff;border-color:#0f1419}
   .mrow.hl{outline:2px solid var(--sel);outline-offset:2px;border-radius:8px}
   .mpop{display:flex;flex-direction:column;gap:4px;font-size:13px;min-width:180px}
   .mpop .st{display:flex;align-items:center;gap:6px}
@@ -374,7 +374,7 @@
   </div>
 </div>
 
-<div id="drawBar" hidden><span id="drawText"></span><span id="drawSides" hidden></span><button id="drawManual" type="button" hidden>Von Hand zeichnen</button><button id="drawUndo" type="button">Letzten Punkt zurück</button><button id="drawDone" type="button" class="primary">Fertig</button><button id="drawCancel" type="button">Abbrechen</button></div>
+<div id="drawBar" hidden><span id="drawText"></span><span id="drawSides" hidden></span><span id="drawDirs" hidden></span><button id="drawDel" type="button" hidden>Punkt löschen</button><button id="drawManual" type="button" hidden>Von Hand zeichnen</button><button id="drawUndo" type="button">Letzten Punkt zurück</button><button id="drawDone" type="button" class="primary">Fertig</button><button id="drawCancel" type="button">Abbrechen</button></div>
 <div id="pickBar" hidden><span>Tippe auf die Karte, um den Ort der Baustelle zu wählen.</span><button id="pickCancel">Abbrechen</button></div>
 <div id="v3d" class="overlay solid v3" role="dialog" aria-modal="true" aria-labelledby="v3Title" hidden>
   <div class="v3wrap">
@@ -1121,8 +1121,18 @@ const DRAW_KINDS = {
 };
 const DRAW_ORDER = ["erneuern","strasse","wasser","abwasser","gas","strom","kabel","hecke","baum","bereich","rasen","belag"];
 const LEITUNG_HINWEIS = "Gezeichnete Leitungen sind eine Skizze und ersetzen keinen Werkleitungsplan. Vor dem Graben Pläne einholen.";
-const mapDrawing = r => ({ id:r.id, site:r.site_id, kind:r.kind, geom:r.geom, label:r.label || "", seite:r.seite || "beide", by:r.author || "", createdBy:r.created_by, at:r.created_at });
+const mapDrawing = r => ({ id:r.id, site:r.site_id, kind:r.kind, geom:r.geom, label:r.label || "", seite:r.seite || "beide",
+  richtung:r.richtung || "beide", zustand:r.zustand || "", notiz:r.notiz || "", by:r.author || "", createdBy:r.created_by, at:r.created_at });
 let seiteOk = true;    // false, wenn die Spalte drawings.seite noch fehlt (schema.sql erneut ausführen)
+let attrOk = true;     // false, wenn richtung/zustand/notiz und das Bearbeiten noch fehlen (schema.sql erneut ausführen)
+const UPDATE_HINWEIS = "Das braucht ein Datenbank-Update: schema.sql im Supabase SQL Editor noch einmal ausführen.";
+// Zustand einer Zeichnung (frei wählbar, später änderbar) und Fahrtrichtung einer gezeichneten Strasse
+const ZUSTAND = { "":"keine Angabe", neu:"neu", bestand:"bestehend", erneuern:"wird erneuert", rueckbau:"Rückbau" };
+const hasDir = kind => kind === "strasse" || kind === "erneuern";
+function dirNames(pts){ const n = sideNames(pts); return { hin:n.rechts.replace("Fahrtrichtung", "Einbahn Richtung"), her:n.links.replace("Fahrtrichtung", "Einbahn Richtung") }; }
+const dirOf = d => hasDir(d.kind) && (d.richtung === "hin" || d.richtung === "her") && d.geom && d.geom.type === "LineString" ? dirNames(d.geom.coordinates)[d.richtung] : "";
+// Zusatz hinter der Art: "neu · nur Fahrtrichtung Osten · Einbahn Richtung Osten · DN 150"
+const drawingExtra = d => (d.zustand && ZUSTAND[d.zustand] ? " · " + ZUSTAND[d.zustand] : "") + (sideOf(d) ? " · nur " + sideOf(d) : "") + (dirOf(d) ? " · " + dirOf(d) : "") + (d.label ? " · " + d.label : "");
 
 /* Welche Fahrtrichtung ist "links" bzw. "rechts" einer Linie (von Anfang zu Ende)? Rechtsverkehr: auf der rechten Seite
    fährt man in Zeichnungsrichtung, auf der linken entgegen. Für "nur Fahrtrichtung Osten" usw. */
@@ -1166,25 +1176,100 @@ function drawingMeasure(d){
   if(g.type === "Polygon"){ const a = geoArea((g.coordinates || [])[0] || []); return "ca. " + (a < 1000 ? Math.round(a) : Math.round(a / 10) * 10) + " m²"; }
   return "";
 }
-const drawingTitle = d => (DRAW_KINDS[d.kind] ? DRAW_KINDS[d.kind].t : d.kind) + (sideOf(d) ? " · nur " + sideOf(d) : "") + (d.label ? " · " + d.label : "");
+const drawingTitle = d => (DRAW_KINDS[d.kind] ? DRAW_KINDS[d.kind].t : d.kind) + drawingExtra(d);
 
-async function addDrawings(s, kind, geoms, label, seite){
-  label = String(label || "").replace(/\s+/g, " ").trim().slice(0, 60);
+const trimText = (v, n) => String(v || "").replace(/\s+/g, " ").trim().slice(0, n);
+async function addDrawings(s, kind, geoms, label, seite, extra){
+  label = trimText(label, 60);
   seite = seite === "links" || seite === "rechts" ? seite : "beide";
+  extra = extra || {};
+  const richtung = hasDir(kind) && (extra.richtung === "hin" || extra.richtung === "her") ? extra.richtung : "beide";
+  const zustand = ZUSTAND[extra.zustand] && extra.zustand ? extra.zustand : "", notiz = trimText(extra.notiz, 200);
+  const more = richtung !== "beide" || zustand || notiz;
   if(!geoms.length) return false;
   if(!LIVE){
-    geoms.forEach(g => drawings.push({ id:"z" + (++localId), site:s.id, kind, geom:g, label, seite, by:"Demo", createdBy:"demo", at:new Date().toISOString() }));
+    geoms.forEach(g => drawings.push({ id:"zn" + (++localId), site:s.id, kind, geom:g, label, seite, richtung, zustand, notiz, by:"Demo", createdBy:"demo", at:new Date().toISOString() }));
   }else{
     if(!drawingsOk){ toast("Nicht gespeichert: Datenbank-Update nötig (schema.sql erneut ausführen).", true); return false; }
     if(seite !== "beide" && !seiteOk){ toast("Nur eine Strassenseite braucht ein Datenbank-Update (schema.sql erneut ausführen).", true); return false; }
-    const r = await sb.from("drawings").insert(geoms.map(g => seite !== "beide" ? { site_id:s.id, kind, geom:g, label, seite } : { site_id:s.id, kind, geom:g, label })).select();
+    if(more && !attrOk){ toast("Zustand, Fahrtrichtung und Notiz: " + UPDATE_HINWEIS, true); return false; }
+    const r = await sb.from("drawings").insert(geoms.map(g => {
+      const row = { site_id:s.id, kind, geom:g, label };
+      if(seite !== "beide") row.seite = seite;
+      if(more){ row.richtung = richtung; row.zustand = zustand; row.notiz = notiz; }
+      return row; })).select();
     if(r.error){ toast("Zeichnung konnte nicht gespeichert werden: " + r.error.message, true); return false; }
     r.data.forEach(row => upsertDrawing(mapDrawing(row)));
   }
-  const k = DRAW_KINDS[kind].t + (seite !== "beide" && geoms[0].type === "LineString" ? " nur " + sideNames(geoms[0].coordinates)[seite] : "");
+  const k = DRAW_KINDS[kind].t + drawingExtra({ kind, geom:geoms[0], seite, richtung, zustand, label:"" }).replace(/ · /g, ", ").replace(/^, /, " ");
   addLog("Gezeichnet: " + (geoms.length > 1 ? geoms.length + " × " : "") + k + (label ? " " + label : "") + " (" + s.name + ")");
   render();
   return true;
+}
+/* Zeichnung ändern (Art, Bezeichnung, Zustand, Fahrtrichtung, Seite, Notiz oder Verlauf). Erlaubt für den Zeichner und Admins,
+   die Datenbank prüft das (Regel drawings_update). patch nutzt die Spaltennamen der Datenbank. */
+async function updateDrawingRow(d, patch){
+  const s = findSite(d.site);
+  if(patch.label != null) patch.label = trimText(patch.label, 60);
+  if(patch.notiz != null) patch.notiz = trimText(patch.notiz, 200);
+  if(LIVE){
+    if(!attrOk){ toast("Bearbeiten: " + UPDATE_HINWEIS, true); return false; }
+    const r = await sb.from("drawings").update(patch).eq("id", d.id).select();
+    if(r.error){ toast("Ändern fehlgeschlagen: " + r.error.message, true); return false; }
+    if(!r.data || !r.data.length){ toast("Ändern nicht erlaubt: nur wer gezeichnet hat oder ein Admin.", true); return false; }
+    upsertDrawing(mapDrawing(r.data[0]));
+  }else{
+    Object.assign(d, patch);
+  }
+  const now = drawings.find(x => x.id === d.id) || d;
+  addLog("Zeichnung geändert: " + drawingTitle(now) + (s ? " (" + s.name + ")" : ""));
+  render();
+  return true;
+}
+// Fenster "Bearbeiten": alle Angaben einer Zeichnung, dazu der Knopf, um den Verlauf auf der Karte zu ändern
+function modalEditDrawing(d){
+  const k = DRAW_KINDS[d.kind] || {}, body = el("div", "form"), line = d.geom && d.geom.type === "LineString";
+  const kinds = DRAW_ORDER.filter(x => DRAW_KINDS[x].g === k.g).map(x => [x, DRAW_KINDS[x].t]);
+  const kindSel = select(kinds, d.kind, "edKind");
+  body.appendChild(field("Art", kindSel));
+  const lab = input("text", d.label || "", "edLabel"); lab.maxLength = 60; lab.placeholder = "z. B. DN 150, Linde, Zufahrt Nord";
+  body.appendChild(field("Bezeichnung", lab));
+  const zu = select(Object.keys(ZUSTAND).map(x => [x, x ? ZUSTAND[x].charAt(0).toUpperCase() + ZUSTAND[x].slice(1) : "Keine Angabe"]), d.zustand || "", "edZustand");
+  body.appendChild(field("Zustand", zu));
+  const dirWrap = el("div"), sideWrap = el("div");
+  let dirSel = null, sideSel = null;
+  if(line){
+    const dn = dirNames(d.geom.coordinates), sn = sideNames(d.geom.coordinates);
+    dirSel = select([["beide", "Beide Richtungen"], ["hin", dn.hin], ["her", dn.her]], d.richtung || "beide", "edRichtung");
+    dirWrap.appendChild(field("Fahrtrichtung", dirSel));
+    sideSel = select([["beide", "Ganze Strasse"], ["links", "Nur " + sn.links], ["rechts", "Nur " + sn.rechts]], d.seite || "beide", "edSeite");
+    sideWrap.appendChild(field("Betroffen", sideSel));
+    body.appendChild(dirWrap); body.appendChild(sideWrap);
+  }
+  const show = ()=>{ dirWrap.hidden = !hasDir(kindSel.value); sideWrap.hidden = kindSel.value !== "erneuern"; };
+  kindSel.onchange = show; show();
+  const note = input("text", d.notiz || "", "edNotiz"); note.maxLength = 200; note.placeholder = "z. B. Material, Durchmesser, Tiefe, Termin";
+  body.appendChild(field("Notiz", note));
+  if(DRAW_KINDS[d.kind] && DRAW_KINDS[d.kind].leitung) body.appendChild(el("div", "warn", LEITUNG_HINWEIS));
+  if(LIVE && !attrOk) body.appendChild(el("div", "warn", "Bearbeiten: " + UPDATE_HINWEIS));
+  const row = el("div", "inforow");
+  const save = el("button", "primary", "Speichern"); save.type = "button"; save.id = "edSave";
+  save.onclick = async ()=>{
+    save.disabled = true;
+    const kind = kindSel.value;
+    const ok = await updateDrawingRow(d, { kind, label:lab.value, zustand:zu.value, notiz:note.value,
+      richtung:dirSel && hasDir(kind) ? dirSel.value : "beide", seite:sideSel && kind === "erneuern" ? sideSel.value : "beide" });
+    if(ok) closeModal(); else save.disabled = false;
+  };
+  row.appendChild(save);
+  if(MODE === "3d" && lmap && mapReady){
+    const geo = el("button", "", d.geom && d.geom.type === "Point" ? "Auf der Karte verschieben" : "Verlauf auf der Karte ändern"); geo.type = "button"; geo.id = "edGeom";
+    geo.onclick = ()=>startEditGeom(d);
+    row.appendChild(geo);
+  }
+  body.appendChild(row);
+  if(MODE !== "3d") body.appendChild(el("div", "empty", "Den Verlauf ändern geht im Modus 3D auf der Karte."));
+  openModal("Bearbeiten: " + (k.t || d.kind), body);
 }
 async function deleteDrawing(d){
   const s = findSite(d.site);
@@ -1225,8 +1310,13 @@ function renderDrawings(box, s){
     t.appendChild(el("div", "", drawingTitle(d)));
     const meas = drawingMeasure(d);
     t.appendChild(el("div", "muted", (meas ? meas + " (aus der Zeichnung) · " : "") + "gezeichnet von " + (d.by || "?")));
+    if(d.notiz) t.appendChild(el("div", "muted", "Notiz: " + d.notiz));
     r.appendChild(t);
-    if(canDeleteDrawing(d)) r.appendChild(confirmBtn("Löschen", "d:" + d.id, ()=>deleteDrawing(d)));
+    if(canDeleteDrawing(d)){
+      const eb = el("button", "", "Bearbeiten"); eb.type = "button"; eb.id = "ed-" + d.id; eb.onclick = ()=>modalEditDrawing(d);
+      r.appendChild(eb);
+      r.appendChild(confirmBtn("Löschen", "d:" + d.id, ()=>deleteDrawing(d)));
+    }
     box.appendChild(r);
   });
   if(list.length > 40) box.appendChild(el("div", "empty", "… und " + (list.length - 40) + " weitere."));
@@ -1237,6 +1327,11 @@ function modalDraw(s){
   const body = el("div", "form");
   const lab = input("text", "", "drawLabel"); lab.maxLength = 60; lab.placeholder = "z. B. DN 150, Linde, Zufahrt Nord";
   body.appendChild(field("Bezeichnung (freiwillig)", lab));
+  const zu = select(Object.keys(ZUSTAND).map(x => [x, x ? ZUSTAND[x].charAt(0).toUpperCase() + ZUSTAND[x].slice(1) : "Keine Angabe"]), "", "drawZustandSel");
+  body.appendChild(field("Zustand (freiwillig, z. B. neu oder bestehend)", zu));
+  const note = input("text", "", "drawNote"); note.maxLength = 200; note.placeholder = "z. B. Material, Durchmesser, Tiefe, Termin";
+  body.appendChild(field("Notiz (freiwillig)", note));
+  body.appendChild(el("div", "empty", "Bei Strassen wählst du nach dem Zeichnen die Fahrtrichtung. Alles lässt sich später unter \"Bearbeiten\" ändern."));
   const groups = [["Auf der echten Strasse (Linie folgt der Strasse)", "snap"], ["Linien", "line"], ["Punkte (mehrere nacheinander möglich)", "point"], ["Flächen", "area"]];
   groups.forEach(([title, g])=>{
     body.appendChild(el("div", "sub", title));
@@ -1246,7 +1341,7 @@ function modalDraw(s){
       const sw = el("span", "swatch" + (k === "erneuern" ? " stripes" : "")); sw.style.background = k === "erneuern" ? "" : (DRAW_KINDS[k].color || "transparent");
       if(k === "bereich") sw.style.border = "2px solid var(--muted)";
       b.appendChild(sw); b.appendChild(el("span", "", DRAW_KINDS[k].t));
-      b.onclick = ()=>startDrawing(s, k, lab.value);
+      b.onclick = ()=>startDrawing(s, k, lab.value, { zustand:zu.value, notiz:note.value });
       wrap.appendChild(b);
     });
     body.appendChild(wrap);
@@ -2566,19 +2661,19 @@ function gotoMachine(m){
   flashMachine(m);
 }
 function drawingGeo(){
-  return { type:"FeatureCollection", features:drawings.filter(d => d.kind !== "bereich" && DRAW_KINDS[d.kind] && d.geom).map(d=>{
+  return { type:"FeatureCollection", features:drawings.filter(d => d.kind !== "bereich" && DRAW_KINDS[d.kind] && d.geom && !(drawState && drawState.edit === d.id)).map(d=>{
     const site = findSite(d.site);
     const half = d.seite === "links" || d.seite === "rechts";
     return { type:"Feature", geometry:d.geom, properties:{ id:d.id, site:d.site, kind:d.kind, color:DRAW_KINDS[d.kind].color || "#a7b1bc",
-      w:half ? 0.5 : 1, off:d.seite === "rechts" ? 1 : d.seite === "links" ? -1 : 0,
-      text:DRAW_KINDS[d.kind].t.replace(/ \/.*$/, "") + (sideOf(d) ? " · nur " + sideOf(d) : "") + (d.label ? " · " + d.label : ""), dim:!!(site && !showSite(site)) } };
+      w:half ? 0.5 : 1, off:d.seite === "rechts" ? 1 : d.seite === "links" ? -1 : 0, dir:dirOf(d) ? (d.richtung === "hin" ? 1 : -1) : 0,
+      text:DRAW_KINDS[d.kind].t.replace(/ \/.*$/, "") + drawingExtra(d), dim:!!(site && !showSite(site)) } };
   }) };
 }
 function previewGeo(){
   const f = [];
   if(drawState){
     const pts = drawState.pts, g = DRAW_KINDS[drawState.kind].g;
-    if(!(DRAW_KINDS[drawState.kind].snap && !drawState.manual)) pts.forEach(p => f.push({ type:"Feature", properties:{}, geometry:{ type:"Point", coordinates:p } }));
+    if(!(DRAW_KINDS[drawState.kind].snap && !drawState.manual)) pts.forEach((p, i) => f.push({ type:"Feature", properties:{ sel:drawState.sel === i }, geometry:{ type:"Point", coordinates:p } }));
     const sd = drawState.seite;
     if(g !== "point" && pts.length >= 2) f.push({ type:"Feature", properties:{ band:!!DRAW_KINDS[drawState.kind].snap, w:sd === "beide" ? 1 : 0.5, off:sd === "rechts" ? 1 : sd === "links" ? -1 : 0 },
       geometry:{ type:"LineString", coordinates:g === "area" && pts.length >= 3 ? pts.concat([pts[0]]) : pts } });
@@ -2624,7 +2719,7 @@ const INFOS = [
   { id:"haeuser",  g:"Karte", t:"3D-Häuser", d:"", on:true, layers:["bauten"] },
   { id:"relief",   g:"Karte", t:"Relief", d:"Schattierung des Geländes", on:true, layers:["relief"] },
   { id:"zeichnungen", g:"Baustellen", t:"Zeichnungen", d:"Strassen, Leitungen, Bäume, Flächen der Baustellen", on:true,
-    layers:["dr-belag", "dr-rasen", "dr-area-line", "dr-strasse", "dr-ern-full", "dr-ern-full-w", "dr-ern-half", "dr-ern-half-w", "dr-ern-dir", "dr-line", "dr-leitung", "dr-tree", "dr-label", "dr-label-area"] },
+    layers:["dr-belag", "dr-rasen", "dr-area-line", "dr-strasse", "dr-ern-full", "dr-ern-full-w", "dr-ern-half", "dr-ern-half-w", "dr-ern-dir", "dr-dir", "dr-line", "dr-leitung", "dr-tree", "dr-label", "dr-label-area"] },
   { id:"maschinen", g:"Baustellen", t:"Maschinen", d:"Bilder, 3D-Modelle und Namen", on:true, layers:["mach-3d", "mach-ring", "mach-label", "mach-icon", "mach-icon-text"] }
 ];
 let infoOn = (()=>{ let s = {}; try{ s = JSON.parse(localStorage.getItem("karteInfos") || "{}") || {}; }catch(e){}
@@ -2908,6 +3003,12 @@ function addMapLayers(){
              "icon-rotate":["case", ["==", ["get", "off"], -1], 180, 0],
              "icon-offset":["interpolate", ["exponential", 2], ["zoom"], 14, ["literal", [0, 0.8]], 20, ["literal", [0, 48]]] },
     paint:{ "icon-opacity":dop(1) } });
+  // Gezeichnete Strasse mit Fahrtrichtung (Einbahn): Pfeile in der Mitte
+  add({ id:"dr-dir", type:"symbol", source:"drawings", minzoom:14.5, filter:["all", ["!=", ["get", "dir"], 0], ["==", ["get", "w"], 1]],
+    layout:{ "symbol-placement":"line", "symbol-spacing":["interpolate", ["linear"], ["zoom"], 15, 70, 19, 170], "icon-image":["case", ern, "pfeil-ern", "pfeil"],
+             "icon-rotation-alignment":"map", "icon-pitch-alignment":"map", "icon-allow-overlap":true, "icon-ignore-placement":true,
+             "icon-size":["interpolate", ["linear"], ["zoom"], 15, 0.6, 19, 1.1], "icon-rotate":["case", ["==", ["get", "dir"], -1], 180, 0] },
+    paint:{ "icon-opacity":dop(1) } });
   add({ id:"dr-line", type:"line", source:"drawings", filter:["==", ["get", "kind"], "hecke"],
     layout:{ "line-cap":"round", "line-join":"round" },
     paint:{ "line-color":["get", "color"], "line-opacity":dop(1), "line-width":["interpolate", ["linear"], ["zoom"], 14, 2, 19, 7] } });
@@ -2968,7 +3069,7 @@ function addMapLayers(){
   add({ id:"dp-line", type:"line", source:"draw-preview", filter:["==", ["geometry-type"], "LineString"],
     paint:{ "line-color":cssVar("--sel"), "line-width":3, "line-dasharray":[1.5, 1] } });
   add({ id:"dp-pts", type:"circle", source:"draw-preview", filter:["==", ["geometry-type"], "Point"],
-    paint:{ "circle-radius":["case", ["==", ["get", "tap"], true], 7, 6], "circle-color":["case", ["==", ["get", "tap"], true], cssVar("--sel"), "#ffffff"],
+    paint:{ "circle-radius":["case", ["==", ["get", "sel"], true], 11, ["==", ["get", "tap"], true], 7, 6], "circle-color":["case", ["any", ["==", ["get", "tap"], true], ["==", ["get", "sel"], true]], cssVar("--sel"), "#ffffff"],
             "circle-stroke-color":["case", ["==", ["get", "tap"], true], "#ffffff", cssVar("--sel")], "circle-stroke-width":3 } });
   add({ id:"site-dot", type:"circle", source:"site-pts", maxzoom:13.5,
     paint:{ "circle-radius":["case", ["get", "sel"], 9, 7], "circle-color":["get", "color"],
@@ -3140,26 +3241,69 @@ function syncMapSites(){
 }
 
 /* Zeichnen auf der Karte: Punkte antippen, "Fertig" speichert. Baum: jeder Tipp ein Baum. */
-function startDrawing(s, kind, label){
+function startDrawing(s, kind, label, extra){
   if(!lmap || !mapReady) return;
   closeModal();
-  drawState = { site:s.id, kind, label:label || "", pts:[], taps:[], manual:false, seite:"beide", err:"" };
+  extra = extra || {};
+  drawState = { site:s.id, kind, label:label || "", pts:[], taps:[], manual:false, seite:"beide", err:"", richtung:"beide", zustand:extra.zustand || "", notiz:extra.notiz || "", sel:-1, hist:[] };
   $("drawBar").hidden = false; $("map").classList.add("picking");
   const c = siteCenter(s);
   flyCam(c, Math.max(lmap.getZoom(), 17), null, 900);
   $("map").scrollIntoView({ behavior:"smooth", block:"center" });
   updateDrawing();
 }
+/* Verlauf einer bestehenden Zeichnung ändern: Punkt antippen (wird markiert), dann die neue Stelle antippen.
+   Ein Tipp neben die Punkte hängt bei Linien und Flächen einen Punkt an. "Zurück" nimmt jeden Schritt zurück. */
+function startEditGeom(d){
+  if(!lmap || !mapReady || !d.geom) return;
+  closeModal();
+  const g = d.geom, pts = g.type === "Point" ? [g.coordinates.slice()] : g.type === "Polygon" ? g.coordinates[0].slice(0, -1).map(p => p.slice()) : g.coordinates.map(p => p.slice());
+  drawState = { site:d.site, kind:d.kind, label:d.label, pts, taps:[], manual:true, seite:d.seite, err:"", richtung:d.richtung, zustand:d.zustand, notiz:d.notiz, edit:d.id, sel:-1, hist:[] };
+  $("drawBar").hidden = false; $("map").classList.add("picking");
+  flyCam(pts[0], Math.max(lmap.getZoom(), 17), null, 900);
+  $("map").scrollIntoView({ behavior:"smooth", block:"center" });
+  syncMapSites();                                             // die alte Linie verschwindet, solange bearbeitet wird
+  updateDrawing();
+}
+// Punkt der Zeichnung in der Nähe eines Tipps (höchstens 16 Pixel), sonst -1
+function nearPoint(pts, p){
+  if(!lmap.project) return -1;
+  const a = lmap.project(p); let best = -1, bd = 16;
+  pts.forEach((q, i)=>{ const b = lmap.project(q), dd = Math.hypot(a.x - b.x, a.y - b.y); if(dd <= bd){ bd = dd; best = i; } });
+  return best;
+}
 function drawTap(p){
   const d = drawState;
+  if(d.edit){
+    const g = DRAW_KINDS[d.kind].g, i = nearPoint(d.pts, p);
+    if(i >= 0 && d.sel < 0){ d.sel = i; }
+    else if(i >= 0 && i === d.sel){ d.sel = -1; }
+    else if(i >= 0){ d.sel = i; }
+    else {
+      d.hist.push(d.pts.map(q => q.slice()));
+      if(d.sel >= 0){ d.pts[d.sel] = p; d.sel = -1; }
+      else if(g === "point") d.pts[0] = p;
+      else d.pts.push(p);
+    }
+    updateDrawing();
+    return;
+  }
   if(DRAW_KINDS[d.kind].snap && !d.manual){ d.taps.push(p); recomputeSnap(); }
   else d.pts.push(p);
   updateDrawing();
 }
 function drawUndo(){
   const d = drawState; if(!d) return;
+  if(d.edit){ if(d.hist.length){ d.pts = d.hist.pop(); d.sel = -1; } updateDrawing(); return; }
   if(DRAW_KINDS[d.kind].snap && !d.manual){ d.taps.pop(); recomputeSnap(); }
   else d.pts.pop();
+  updateDrawing();
+}
+function drawDelPoint(){
+  const d = drawState; if(!d || !d.edit || d.sel < 0) return;
+  const need = DRAW_KINDS[d.kind].g === "line" ? 2 : DRAW_KINDS[d.kind].g === "area" ? 3 : 1;
+  if(d.pts.length <= need) return;
+  d.hist.push(d.pts.map(q => q.slice())); d.pts.splice(d.sel, 1); d.sel = -1;
   updateDrawing();
 }
 // Linie aus den Tipps entlang der echten Strassen (Strassennetz aus den Kartendaten)
@@ -3191,7 +3335,11 @@ function updateDrawing(){
   const need = k.g === "line" ? 2 : k.g === "area" ? 3 : 1;
   const what = k.g === "point" ? (n === 1 ? "1 " + k.t : n + " × " + k.t) : n + (n === 1 ? " Punkt" : " Punkte");
   let txt;
-  if(snap){
+  if(d.edit){
+    txt = "Bearbeiten (" + k.t + "): " + (k.g === "point" ? "Tippe auf die neue Stelle. " : d.sel >= 0 ? "Punkt " + (d.sel + 1) + " ist markiert: jetzt die neue Stelle antippen, oder \"Punkt löschen\". "
+      : "Punkt antippen, dann die neue Stelle antippen. Ein Tipp daneben hängt am Ende einen Punkt an. ")
+      + (k.g === "line" && n >= 2 ? "Länge " + drawingMeasure({ geom:{ type:"LineString", coordinates:d.pts } }) + "." : "");
+  } else if(snap){
     txt = k.t + ": Tippe auf den Anfang und dann auf das Ende des Abschnitts, weitere Tipps verlängern. Die Linie folgt der Strasse. ";
     txt += d.err ? d.err : n >= 2 ? "Länge " + drawingMeasure({ geom:{ type:"LineString", coordinates:d.pts } }) + "." : (d.taps.length ? "Jetzt das Ende antippen." : "");
   } else {
@@ -3200,12 +3348,27 @@ function updateDrawing(){
   }
   $("drawText").textContent = txt;
   $("drawDone").disabled = n < need || (snap && !!d.err);
-  $("drawUndo").disabled = snap ? d.taps.length === 0 : n === 0;
+  $("drawUndo").disabled = d.edit ? d.hist.length === 0 : snap ? d.taps.length === 0 : n === 0;
+  $("drawUndo").textContent = d.edit ? "Schritt zurück" : "Letzten Punkt zurück";
+  $("drawDone").textContent = d.edit ? "Speichern" : "Fertig";
   $("drawManual").hidden = !snap;
+  $("drawDel").hidden = !(d.edit && d.sel >= 0 && n > need);
+  // Fahrtrichtung wählen (gezeichnete Strasse, sobald es eine Linie gibt; beim Bearbeiten im Fenster "Bearbeiten")
+  const dirs = $("drawDirs");
+  dirs.innerHTML = "";
+  dirs.hidden = !(hasDir(d.kind) && n >= 2 && !d.edit);
+  if(!dirs.hidden){
+    const dn = dirNames(d.pts);
+    [["beide", "Beide Richtungen"], ["hin", dn.hin], ["her", dn.her]].forEach(([v, t])=>{
+      const b = el("button", d.richtung === v ? "on" : "", t); b.type = "button"; b.id = "dir-" + v;
+      b.onclick = ()=>{ d.richtung = v; updateDrawing(); };
+      dirs.appendChild(b);
+    });
+  }
   // Seite wählen (nur bei Strasse erneuern, sobald es eine Linie gibt)
   const sides = $("drawSides");
   sides.innerHTML = "";
-  sides.hidden = !(k.snap && n >= 2);
+  sides.hidden = !(k.snap && n >= 2 && !d.edit);
   if(!sides.hidden){
     const nm = sideNames(d.pts);
     [["beide", "Ganze Strasse"], ["links", "Nur " + nm.links], ["rechts", "Nur " + nm.rechts]].forEach(([v, t])=>{
@@ -3353,9 +3516,11 @@ function routeOnNet(net, s, e){
   return path.reverse();
 }
 function endDrawing(){
+  const wasEdit = drawState && drawState.edit;
   drawState = null;
   $("drawBar").hidden = true; $("map").classList.remove("picking");
   const pv = lmap && lmap.getSource("draw-preview"); if(pv) pv.setData(previewGeo());
+  if(wasEdit) syncMapSites();                                 // die alte Linie wieder zeigen
 }
 async function finishDrawing(){
   if(!drawState) return;
@@ -3370,7 +3535,13 @@ async function finishDrawing(){
   else if(k.g === "area" && d.pts.length >= 3) geoms = [{ type:"Polygon", coordinates:[d.pts.slice(0, 500).concat([d.pts[0]])] }];
   if(!geoms.length || !s) return;
   $("drawDone").disabled = true;
-  const ok = await addDrawings(s, d.kind, geoms, d.label, d.seite);
+  if(d.edit){
+    const cur = drawings.find(x => x.id === d.edit);
+    const done = cur ? await updateDrawingRow(cur, { geom:geoms[0] }) : false;
+    if(done || !cur) endDrawing(); else updateDrawing();
+    return;
+  }
+  const ok = await addDrawings(s, d.kind, geoms, d.label, d.seite, { richtung:d.richtung, zustand:d.zustand, notiz:d.notiz });
   if(ok) endDrawing(); else updateDrawing();
 }
 
@@ -4331,7 +4502,8 @@ async function loadAll(){
     sb.from("drawings").select("*").order("created_at").limit(5000),
     sb.from("drawings").select("seite").limit(1),
     sb.from("machines").select("stunden").limit(1),
-    sb.from("machines").select("foto_pfad").limit(1)
+    sb.from("machines").select("foto_pfad").limit(1),
+    sb.from("drawings").select("richtung,zustand,notiz").limit(1)
   ]);
   const err = res[0].error || res[1].error || res[2].error;
   if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
@@ -4344,6 +4516,7 @@ async function loadAll(){
   fotoOk = !res[9].error;
   wartungOk = !res[8].error;                                           // ohne die Spalten läuft alles, nur ohne Wartung
   drawingsOk = !res[6].error;
+  attrOk = drawingsOk && !res[10].error;
   seiteOk = drawingsOk && !res[7].error;                              // ohne Tabelle drawings: Liste mit Hinweis, alles andere läuft
   drawings = drawingsOk ? res[6].data.map(mapDrawing) : [];                               // ohne Spalte weitere_sparten: nur die Hauptsparte
   matsOk = !res[4].error;                                  // ohne Tabelle materials gehen Katalog und freie Eingabe trotzdem
@@ -4520,6 +4693,7 @@ $("tablesBtn").onclick = ()=>modalTables("sites");
 $("drawUndo").onclick = drawUndo;
 $("drawManual").onclick = ()=>{ if(drawState){ drawState.manual = true; drawState.pts = drawState.taps.slice(); drawState.taps = []; drawState.err = ""; updateDrawing(); } };
 $("drawDone").onclick = finishDrawing;
+$("drawDel").onclick = drawDelPoint;
 $("drawCancel").onclick = endDrawing;
 document.addEventListener("keydown", e=>{ if(e.key === "Escape" && drawState) endDrawing(); });
 $("pickCancel").onclick = ()=>{ pickCb = null; $("pickBar").hidden = true; $("map").classList.remove("picking"); modalSite(pickDraft || undefined); };

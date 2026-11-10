@@ -353,8 +353,28 @@ out=$(as_user $U2 "insert into public.drawings(site_id,kind,geom) values ('$DSIT
 expect "Zeichnung: nicht freigegebene Person kann nicht zeichnen" "row-level security" "$out"
 expect_eq "Zeichnung: nicht freigegebene Person sieht keine Zeichnungen" "0" "$(as_user $U2 "select count(*) from public.drawings;" | tail -1)"
 expect "Zeichnung: nicht angemeldet kein Zugriff" "permission denied" "$(as_anon "select count(*) from public.drawings;")"
-out=$(as_user $U3 "update public.drawings set label='geändert' where id='$DRW';")
-expect "Zeichnung: ändern ist nicht erlaubt (nur löschen und neu zeichnen)" "permission denied" "$out"
+out=$(as_user $U3 "update public.drawings set label='  DN  200 ', zustand='neu', richtung='hin', notiz='  PE,   1.2 m tief ' where id='$DRW' returning label||'|'||zustand||'|'||richtung||'|'||notiz||'|'||author;")
+expect_eq "Zeichnung: Zeichner bearbeitet Bezeichnung, Zustand, Richtung und Notiz (bereinigt, Zeichner bleibt)" "DN 200|neu|hin|PE, 1.2 m tief|ma" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "update public.drawings set geom='{\"type\":\"LineString\",\"coordinates\":[[8.84,47.23],[8.85,47.24],[8.86,47.24]]}' where id='$DRW' returning jsonb_array_length(geom->'coordinates');")
+expect_eq "Zeichnung: Zeichner ändert den Verlauf" "3" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "update public.drawings set kind='gas' where id='$DRW' returning kind;")
+expect_eq "Zeichnung: Art wechseln geht, wenn die Geometrie passt" "gas" "$(echo "$out" | tail -1)"
+out=$(as_user $U3 "update public.drawings set kind='baum' where id='$DRW';")
+expect "Zeichnung: Art wechseln auf unpassende Geometrie wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "update public.drawings set zustand='kaputt' where id='$DRW';")
+expect "Zeichnung: unbekannter Zustand wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "update public.drawings set richtung='quer' where id='$DRW';")
+expect "Zeichnung: unbekannte Richtung wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "update public.drawings set created_by='$U1' where id='$DRW';")
+expect "Zeichnung: Zeichner lässt sich nicht umschreiben" "permission denied" "$out"
+out=$(as_user $U3 "update public.drawings set author='Chef' where id='$DRW';")
+expect "Zeichnung: Name des Zeichners lässt sich nicht umschreiben" "permission denied" "$out"
+out=$(as_user $U4 "update public.drawings set label='fremd' where id='$DRW' returning id;")
+expect_not "Zeichnung: anderer Mitarbeiter kann fremde Zeichnung nicht bearbeiten" "$DRW" "$out"
+out=$(as_user $U1 "update public.drawings set label='vom Admin', kind='wasser' where id='$DRW' returning label||'|'||author||'|'||(created_by='$U3');")
+expect_eq "Zeichnung: Admin bearbeitet fremde Zeichnung, Zeichner bleibt derselbe" "vom Admin|ma|true" "$(echo "$out" | tail -1)"
+out=$(as_user $U2 "update public.drawings set label='x' where id='$DRW' returning id;")
+expect_not "Zeichnung: nicht freigegebene Person kann nichts bearbeiten" "$DRW" "$out"
 out=$(as_user $U4 "delete from public.drawings where id='$DRW' returning id;")
 expect_not "Zeichnung: anderer Mitarbeiter kann fremde Zeichnung nicht löschen" "$DRW" "$out"
 out=$(as_user $U3 "delete from public.drawings where id='$DRW' returning id;")
@@ -456,7 +476,7 @@ expect_eq "Alte Datenbank hat noch keine Tabelle needs" "t" "$($PA -c "select to
 out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
 expect_not "Update: neues schema.sql läuft ohne Fehler über die alte Datenbank" "ERROR" "$out"
 expect_eq "Update: Tabelle needs ist da" "t" "$($PA -c "select to_regclass('public.needs') is not null")"
-expect_eq "Update: Tabelle drawings ist da (mit Spalte seite)" "true 1" "$($PA -c "select (to_regclass('public.drawings') is not null)::text||' '||(select count(*) from information_schema.columns where table_name='drawings' and column_name='seite')")"
+expect_eq "Update: Tabelle drawings ist da (mit Spalten seite, richtung, zustand, notiz)" "true 4" "$($PA -c "select (to_regclass('public.drawings') is not null)::text||' '||(select count(*) from information_schema.columns where table_name='drawings' and column_name in ('seite','richtung','zustand','notiz'))")"
 expect_eq "Update: Tabelle materials ist da" "t" "$($PA -c "select to_regclass('public.materials') is not null")"
 expect_eq "Update: Tabelle downtimes ist da, offene Einträge stimmen mit den gestörten Maschinen überein" "t" "$($PA -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
 expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"
