@@ -356,6 +356,33 @@ as_user $U3 "insert into public.drawings(site_id,kind,geom) values ('$TMP','kabe
 as_user $U1 "delete from public.sites where id='$TMP';" >/dev/null
 expect_eq "Zeichnung: mit der Baustelle verschwinden auch ihre Zeichnungen" "0" "$($P -c "select count(*) from public.drawings where site_id='$TMP'")"
 
+# ---------------------------------------------------------------- Wartung
+echo
+echo "=== Wartung (Betriebsstunden, Service-Intervall, Termin) ==="
+W=$($P -c "select id from public.machines where name='Bagger 1'")
+wcol () { $P -c "select $1 from public.machines where id='$W'"; }
+expect_eq "Wartung: neue Maschinen starten mit 0 Stunden, ohne Intervall und ohne Termin" "0|0||" "$(wcol "stunden||'|'||service_stunden||'|'||coalesce(service_intervall::text,'')||'|'||coalesce(service_termin::text,'')")"
+as_user $U3 "update public.machines set status='broken', reason='' where id='$W';" >/dev/null
+DT=$($P -c "select count(*) from public.downtimes where machine_id='$W'")
+out=$(as_user $U3 "update public.machines set stunden=1180, service_stunden=700, service_intervall=500, service_termin='2031-05-04' where id='$W' returning stunden||'|'||service_stunden||'|'||service_intervall||'|'||service_termin;")
+expect "Wartung: freigegebener Mitarbeiter trägt Stunden, Intervall und Termin ein" "1180|700|500|2031-05-04" "$out"
+expect_eq "Wartung: der Absender der Störungsmeldung bleibt dabei unverändert" "ma" "$(wcol reported_name)"
+expect_eq "Wartung: Eintragen erzeugt keinen neuen Eintrag im Störungsverlauf" "$DT" "$($P -c "select count(*) from public.downtimes where machine_id='$W'")"
+out=$(as_user $U3 "update public.machines set stunden=-1 where id='$W';")
+expect "Wartung: negative Stunden werden abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "update public.machines set service_intervall=0 where id='$W';")
+expect "Wartung: Intervall 0 wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "update public.machines set stunden=1000000 where id='$W';")
+expect "Wartung: unsinnig hohe Stunden werden abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "update public.machines set service_intervall=null, service_termin=null where id='$W' returning coalesce(service_intervall::text,'leer');")
+expect "Wartung: Intervall und Termin lassen sich wieder leeren" "leer" "$out"
+out=$(as_user $U2 "update public.machines set stunden=5 where id='$W' returning id;")
+expect_not "Wartung: nicht freigegebene Person darf nichts eintragen" "$W" "$out"
+expect_eq "Wartung: Stunden sind nach dem Versuch der nicht freigegebenen Person unverändert" "1180" "$(wcol stunden)"
+out=$(as_anon "update public.machines set stunden=5 where id='$W';")
+expect "Wartung: ohne Anmeldung kein Zugriff" "permission denied" "$out"
+as_user $U3 "update public.machines set status='running', reason='' where id='$W';" >/dev/null
+
 # ---------------------------------------------------------------- Update einer bestehenden (alten) Datenbank
 echo
 echo "=== Update einer alten Datenbank (mit Prozent-Spalten) ==="
@@ -373,6 +400,7 @@ expect_eq "Update: Tabelle materials ist da" "t" "$($PA -c "select to_regclass('
 expect_eq "Update: Tabelle downtimes ist da, offene Einträge stimmen mit den gestörten Maschinen überein" "t" "$($PA -c "select (select count(*) from public.downtimes where ended_at is null) = (select count(*) from public.machines where status in ('waiting','broken'))")"
 expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"
 expect_eq "Update: Spalte weitere_sparten ist an sites ergänzt, alte Baustellen haben keine weiteren Sparten" "1 true" "$($PA -c "select (select count(*) from information_schema.columns where table_schema='public' and table_name='sites' and column_name='weitere_sparten')||' '||(select bool_and(weitere_sparten = '{}') from public.sites)")"
+expect_eq "Update: Wartungs-Spalten sind an machines ergänzt, alte Maschinen haben 0 Stunden und kein Intervall" "4 true" "$($PA -c "select (select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('stunden','service_stunden','service_intervall','service_termin'))||' '||(select bool_and(stunden=0 and service_intervall is null and service_termin is null) from public.machines)")"
 expect_eq "Update: alte Daten sind unverändert" "5 Baustellen, 13 Maschinen" "$($PA -c "select (select count(*) from sites)||' Baustellen, '||(select count(*) from machines)||' Maschinen'")"
 out=$($PA -c "insert into public.sites(name,sparte,lat,lng) values ('Ohne Prozent','tief',47.2,8.8) returning name;" 2>&1)
 expect "Update: Baustelle ohne Material-Spalten anlegen geht weiter" "Ohne Prozent" "$out"

@@ -158,6 +158,12 @@
         if(this.op === "select" && /weitere_sparten/.test(this.cols || "")) return colErr;
         if((this.op === "insert" || this.op === "update") && this.row && "weitere_sparten" in this.row) return colErr;
       }
+      // Alte Datenbank ohne die Wartungs-Spalten an machines (schema.sql noch nicht erneut ausgefuehrt)
+      if(db.noWartungCol && this.t === "machines"){
+        const colErr = { data:null, error:{ code:"42703", message:"column machines.stunden does not exist" } };
+        if(this.op === "select" && /stunden/.test(this.cols || "")) return colErr;
+        if((this.op === "insert" || this.op === "update") && this.row && ("stunden" in this.row || "service_stunden" in this.row)) return colErr;
+      }
       const T = db[this.t];
       if(!T) return { data:null, error:{ code:"42P01", message:"relation \"public." + this.t + "\" does not exist" } };   // Tabelle fehlt (altes schema.sql)
       const isProf = this.t === "profiles";

@@ -570,6 +570,76 @@ with sync_playwright() as p:
     check("Live: Baustelle geloescht", pg.evaluate("window.__db.sites.some(s=>s.name=='Kanal Jona')") is False)
     check("Live: Maschine der Baustelle im Werkhof", pg.evaluate("window.__db.machines[0].site_id") is None and pg.evaluate("window.__db.machines[0].status") == "off")
 
+    # ============================================================ WARTUNG
+    print("=== WARTUNG ===")
+    wd = new_page(b, False); wd.goto(URL + "?modus=leicht"); wd.wait_for_timeout(700)
+    check("Wartung Demo: Chip zaehlt faellige Maschinen (Walze 1)", wd.locator(".svcchip").count() == 1 and "Service fällig: 1" in wd.locator(".svcchip").inner_text())
+    check("Wartung Demo: ruhiger Hinweis nennt die faellige Maschine, nicht die bald faelligen", wd.locator("#svcBanner.show").count() == 1 and "Walze 1" in wd.inner_text("#svcBanner") and "Bagger 1" not in wd.inner_text("#svcBanner"), wd.inner_text("#svcBanner"))
+    check("Wartung Demo: Stoerungs-Banner bleibt aus (Service ist keine Stoerung)", wd.locator("#banner.show").count() == 0)
+    check("Wartung Demo: Hinweis blinkt nicht und hat keine Status-Farbe", wd.evaluate("getComputedStyle($('svcBanner')).animationName") == "none" and wd.evaluate("getComputedStyle($('svcBanner')).backgroundColor") != wd.evaluate("getComputedStyle($('banner')).backgroundColor"))
+    txt = wd.inner_text("#detail")
+    check("Wartung Demo: Baustelle zeigt Service als Text (Bagger 1 in 20 Std., Dumper 1 in 400 Std.)", "Service in 20 Std." in txt and "Service in 400 Std." in txt)
+    check("Wartung Demo: Status der Maschinen bleibt unveraendert", wd.evaluate("machines.filter(m => m.status === 'running').length") == 12 and wd.evaluate("machines.find(m => m.id === 4).status") == "running")
+    wd.click('[data-wartung="1"]')
+    check("Wartung Demo: Fenster zeigt die Werte und den Hinweis zur Handeingabe", wd.locator("#modal").count() == 1 and wd.input_value("#sv-h") == "1180" and wd.input_value("#sv-iv") == "500" and wd.input_value("#sv-hs") == "700" and "von Hand" in wd.inner_text("#modal"))
+    wd.fill("#sv-h", "1300")
+    check("Wartung Demo: Vorschau rechnet live (fällig seit 100 Std.)", "Service fällig seit 100 Std." in wd.inner_text("#sv-info"), wd.inner_text("#sv-info"))
+    wd.fill("#sv-hs", "9999"); wd.click("#sv-save")
+    check("Wartung Demo: Zaehlerstand beim letzten Service hoeher als Betriebsstunden wird abgelehnt, nichts gespeichert", "nicht höher" in wd.inner_text("#sv-msg") and wd.evaluate("machines.find(m => m.id === 1).h") == 1180 and wd.locator("#modal").count() == 1)
+    wd.fill("#sv-hs", "1.5"); wd.click("#sv-save")
+    check("Wartung Demo: keine ganze Zahl wird abgelehnt", "ganze Zahlen" in wd.inner_text("#sv-msg") and wd.evaluate("machines.find(m => m.id === 1).h") == 1180)
+    wd.fill("#sv-hs", "700"); wd.click("#sv-save"); wd.wait_for_timeout(100)
+    check("Wartung Demo: Speichern schliesst das Fenster, Bagger 1 ist jetzt faellig, Chip und Hinweis nennen zwei", wd.locator("#modal").count() == 0 and "Service fällig: 2" in wd.locator(".svcchip").inner_text() and "Bagger 1" in wd.inner_text("#svcBanner") and "Service fällig seit 100 Std." in wd.inner_text("#detail"), wd.inner_text("#svcBanner"))
+    wd.click('[data-wartung="1"]'); wd.click("#sv-done"); wd.wait_for_timeout(100)
+    check("Wartung Demo: Service erledigt setzt den Stand zurueck (in 500 Std.), Chip zaehlt wieder eins", wd.evaluate("machines.find(m => m.id === 1).hs") == 1300 and "Service in 500 Std." in wd.inner_text("#detail") and "Service fällig: 1" in wd.locator(".svcchip").inner_text())
+    check("Wartung Demo: Service erledigt steht im Protokoll", "Service erledigt: Bagger 1 bei 1300 Std." in wd.inner_text("#log"), wd.inner_text("#log"))
+    wd.click('[data-wartung="3"]'); wd.fill("#sv-iv", ""); wd.fill("#sv-due", ""); wd.click("#sv-save"); wd.wait_for_timeout(100)
+    check("Wartung Demo: Intervall leer = kein Intervall, dann keine Servicezeile", wd.evaluate("machines.find(m => m.id === 3).iv") is None and "Service in 400" not in wd.inner_text("#detail"))
+    wd.click('#siteList .item >> text=Umfahrung Nord'); wd.wait_for_timeout(100)
+    check("Wartung Demo: Termin in drei Tagen steht als Text mit Datum und 'in 3 Tagen', ist aber noch nicht faellig", "in 3 Tagen" in wd.inner_text("#detail") and "LKW 1" not in wd.inner_text("#svcBanner"))
+    wd.evaluate("machines.find(m => m.id === 6).due = isoDay(-2); render();")
+    check("Wartung Demo: ueberfaelliger Termin ist faellig (ueberfaellig seit 2 Tagen)", "überfällig seit 2 Tagen" in wd.inner_text("#detail") and "LKW 1" in wd.inner_text("#svcBanner"))
+    wd.evaluate("machines.find(m => m.id === 6).due = isoDay(0); render();")
+    check("Wartung Demo: Termin heute ist faellig", "Service-Termin heute" in wd.inner_text("#detail"))
+    wd.evaluate("machines.find(m => m.id === 6).due = null; render();")
+    wd.click("#tablesBtn"); wd.click("#tabMachines"); wd.wait_for_timeout(100)
+    check("Wartung Demo: Tabelle Maschinen hat die Spalten Betriebsstunden und Service", all(w in wd.inner_text("#tblMachines thead") for w in ["Betriebsstunden", "Service"]))
+    wd.fill("#tblSearch", "fällig seit")
+    check("Wartung Demo: Suche nach 'fällig seit' findet nur Walze 1", wd.locator("#tblMachines tbody tr").count() == 1 and "Walze 1" in wd.inner_text("#tblMachines tbody"), wd.inner_text("#tblNote"))
+    wd.click("#modal >> text=Schliessen")
+    check("Wartung Demo: keine Prozentzahlen im Wartungsfenster, kein Ton", "%" not in wd.evaluate("(()=>{ modalService(machines[0]); const t = $('modal').innerText; closeModal(); return t; })()") and wd.evaluate("window.__audio") == 0)
+
+    WSEED = """(()=>{
+      const d = window.__db;
+      d.users['chef@firma.test'] = {id:'u1', email:'chef@firma.test', password:'x'};
+      d.profiles.push({id:'u1', email:'chef@firma.test', name:'Chef', role:'admin', approved:true});
+      d.session = {user:{id:'u1', email:'chef@firma.test'}};
+      d.sites.push({id:'a', name:'Testweg', sparte:'tief', lat:47.23, lng:8.83});
+      d.machines.push({id:'m1', name:'Bagger A', typ:'Bagger', sparte:'tief', site_id:'a', status:'running', reason:'', stunden:100, service_stunden:0, service_intervall:100, service_termin:null},
+                      {id:'m2', name:'Walze B', typ:'Walze', sparte:'strasse', site_id:'a', status:'running', reason:'', stunden:0, service_stunden:0, service_intervall:null, service_termin:null});
+    })();"""
+    wl = new_page(b, True); wl.add_init_script(WSEED); wl.goto(URL + "?modus=leicht"); wl.wait_for_timeout(900)
+    check("Wartung Live: faellige Maschine aus der Datenbank (jetzt faellig) steht im Hinweis", "Bagger A (Testweg)" in wl.inner_text("#svcBanner") and "Service jetzt fällig" in wl.inner_text("#detail"), wl.inner_text("#svcBanner"))
+    wl.click('[data-wartung="m2"]'); wl.fill("#sv-h", "50"); wl.fill("#sv-iv", "100"); wl.fill("#sv-due", "2031-05-04"); wl.click("#sv-save"); wl.wait_for_timeout(300)
+    row = wl.evaluate("window.__db.machines.find(m => m.id === 'm2')")
+    check("Wartung Live: Speichern schreibt Stunden, Intervall und Termin in die Datenbank", row["stunden"] == 50 and row["service_intervall"] == 100 and row["service_termin"] == "2031-05-04" and row["service_stunden"] == 0, str(row))
+    check("Wartung Live: Status und Absender der Maschine bleiben unberuehrt", row["status"] == "running" and not row.get("reported_name"))
+    check("Wartung Live: Termin steht mit Datum im Detail", "04.05.2031" in wl.inner_text("#detail"))
+    wl.evaluate("((r)=>{ const old = Object.assign({}, r); r.stunden = 10; window.__db.emit('machines', 'UPDATE', r, old); })(window.__db.machines.find(m => m.id === 'm1'))"); wl.wait_for_timeout(300)
+    check("Wartung Live: anderes Handy traegt Stunden ein -> Hinweis verschwindet von selbst", wl.locator("#svcBanner.show").count() == 0 and "Service in 90 Std." in wl.inner_text("#detail"))
+    wl.click('[data-wartung="m1"]'); wl.fill("#sv-h", "190"); wl.click("#sv-done"); wl.wait_for_timeout(300)
+    row = wl.evaluate("window.__db.machines.find(m => m.id === 'm1')")
+    check("Wartung Live: Service erledigt schreibt den Stand und den Eintrag im Protokoll", row["stunden"] == 190 and row["service_stunden"] == 190 and row["service_termin"] is None and any("Service erledigt: Bagger A bei 190 Std." in a["text"] for a in wl.evaluate("window.__db.activity")))
+    wl.evaluate("window.__db.failNext = { table:'machines', msg:'kaputt' }")
+    wl.click('[data-wartung="m1"]'); wl.fill("#sv-h", "500"); wl.click("#sv-save"); wl.wait_for_timeout(300)
+    check("Wartung Live: Fehler beim Speichern -> alter Wert bleibt, Fehler wird gemeldet", wl.evaluate("machines.find(m => m.id === 'm1').h") == 190 and "kaputt" in wl.inner_text("#toast"), wl.inner_text("#toast"))
+    wl.evaluate("closeModal()")
+
+    wo = new_page(b, True); wo.add_init_script(WSEED + "window.__db.noWartungCol = true;"); wo.goto(URL + "?modus=leicht"); wo.wait_for_timeout(900)
+    check("Wartung alte DB ohne Spalten: Seite laeuft, keine Wartung, kein Hinweis, kein Knopf", wo.locator("#detail .mrow").count() == 2 and wo.locator("[data-wartung]").count() == 0 and wo.locator("#svcBanner.show").count() == 0 and wo.locator(".svcchip").count() == 0)
+    wo.evaluate("setMachine(machines.find(m => m.id === 'm1'), { status:'broken', reason:'' }, 'x')"); wo.wait_for_timeout(300)
+    check("Wartung alte DB: Stoerung melden geht weiter", wo.evaluate("window.__db.machines.find(m => m.id === 'm1').status") == "broken")
+
     # ============================================================ VERLAUF DER STOERUNGEN
     print("=== VERLAUF ===")
     hd = new_page(b, False); hd.goto(URL + "?modus=leicht"); hd.wait_for_timeout(600)

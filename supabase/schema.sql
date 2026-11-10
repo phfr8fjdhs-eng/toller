@@ -63,6 +63,18 @@ alter table public.machines add column if not exists reported_by   uuid;
 alter table public.machines add column if not exists reported_name text not null default '';
 alter table public.machines add column if not exists reported_at   timestamptz;
 
+-- Wartung: Betriebsstunden, Service-Intervall und nächster Termin. Alles wird von Hand eingetragen (keine Messung an der Maschine).
+-- "stunden" = Zählerstand der Maschine, "service_stunden" = Zählerstand beim letzten Service, "service_intervall" = Stunden zwischen
+-- zwei Services (leer = kein Intervall), "service_termin" = fester Termin (leer = keiner). Der Status der Maschine bleibt davon unberührt.
+alter table public.machines add column if not exists stunden           integer not null default 0;
+alter table public.machines add column if not exists service_stunden   integer not null default 0;
+alter table public.machines add column if not exists service_intervall integer;
+alter table public.machines add column if not exists service_termin    date;
+alter table public.machines drop constraint if exists machines_wartung_check;
+alter table public.machines add constraint machines_wartung_check check (
+  stunden between 0 and 999999 and service_stunden between 0 and 999999
+  and (service_intervall is null or service_intervall between 1 and 99999));
+
 -- Bedarf je Baustelle: freier Text, zum Beispiel "20 m³ Beton bis Mittwoch"
 create table if not exists public.needs (
   id          uuid primary key default gen_random_uuid(),

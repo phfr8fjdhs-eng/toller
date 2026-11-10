@@ -10,7 +10,7 @@
 <style>
   :root{
     --bg:#0f1419; --panel:#1a222c; --line:#2a3542; --text:#e6edf3; --muted:#8b98a5;
-    --ok:#2ea043; --wait:#d4a72c; --bad:#f85149; --off:#6e7681; --sel:#58a6ff;
+    --ok:#2ea043; --wait:#d4a72c; --bad:#f85149; --off:#6e7681; --sel:#58a6ff; --svc:#a371f7;
     color-scheme:dark;
   }
   *{box-sizing:border-box}
@@ -39,6 +39,12 @@
   .hudbar i{display:block;height:100%;width:100%;background:var(--ok);transition:width .4s,background .4s}
   .muted{color:var(--muted)}
   #demoNote{background:#2a2410;color:#e8d28a;padding:8px 16px;font-size:13px;border-bottom:1px solid #4a3f17}
+  #svcBanner{display:none;background:#2b2147;color:#e9ddff;border-bottom:2px solid var(--svc);padding:8px 16px;font-weight:600;font-size:14px}
+  #svcBanner.show{display:block}
+  .svc{font-size:12px;color:#d2bbff}
+  .svc.due{font-weight:600}
+  .svctag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#1b1233;background:var(--svc)}
+  .dot.svc{background:var(--svc)}
   #banner{display:none;background:var(--bad);color:#fff;padding:10px 16px;font-weight:600}
   #banner.show{display:block;animation:pulse 1s infinite}
   main{display:grid;grid-template-columns:1fr 360px;gap:16px;padding:16px}
@@ -292,6 +298,7 @@
 </header>
 <div id="demoNote" hidden>Demo-Modus: erfundene Daten, nichts wird gespeichert und nichts wird mit anderen Handys geteilt.</div>
 <div id="banner" role="alert"></div>
+<div id="svcBanner" role="status"></div>
 <main>
   <section>
     <div id="map">
@@ -472,7 +479,7 @@ function loadDemo(){
     { id:"s4", name:"Park Seeblick",     sparte:"garten",x:82, y:46, lat:47.2335, lng:8.8185 },
     { id:"s5", name:"Kreisel Eschenbach",sparte:"strasse",extra:["tief"],x:18, y:76, lat:47.2406, lng:8.9221 }
   ];
-  const M = (id,name,typ,sparte,site,status) => ({ id, name, typ, sparte, site, status, reason:"" });
+  const M = (id,name,typ,sparte,site,status) => ({ id, name, typ, sparte, site, status, reason:"", h:0, hs:0, iv:null, due:null });
   machines = [
     M(1,"Bagger 1","Bagger","tief","s3","running"), M(2,"Minibagger 1","Minibagger","tief","s3","running"),
     M(3,"Dumper 1","Dumper","tief","s3","running"), M(4,"Walze 1","Walze","strasse","s2","running"),
@@ -483,6 +490,11 @@ function loadDemo(){
     M(13,"Bagger 2","Bagger","tief",null,"off"), M(14,"LKW 2","LKW","strasse",null,"off"),
     M(15,"Teleskoplader","Teleskoplader","garten",null,"off")
   ];
+  // Wartung (Demo): Bagger 1 bald, Walze 1 fällig, LKW 1 Termin in drei Tagen, Dumper 1 in Ordnung
+  Object.assign(machines[0], { h:1180, hs:700, iv:500 });
+  Object.assign(machines[3], { h:2600, hs:2300, iv:250 });
+  Object.assign(machines[5], { h:3400, hs:3300, iv:null, due:isoDay(3) });
+  Object.assign(machines[2], { h:900, hs:800, iv:500 });
   const N = (id,site,text,hours) => ({ id, site, text, author:"Demo", createdBy:"demo", createdAt:new Date(Date.now() - hours * 3600000).toISOString(), done:false, doneBy:"" });
   needs = [
     N("b1","s2","Asphalt: 2 Lieferungen bis Mittwoch",20), N("b2","s3","20 m³ Kies bis Mittwoch",5),
@@ -649,6 +661,114 @@ function deploy(m, siteId){
   setMachine(m, { site:siteId, status:"running", reason:"" }, m.name + " im Einsatz: " + (s ? s.name : ""));
 }
 
+/* =============================================================== Wartung */
+// Betriebsstunden, Service-Intervall und Termin pro Maschine, alles von Hand eingetragen (keine Messung an der Maschine).
+// Fällig = Intervall verbraucht oder Termin erreicht. Bald = höchstens SVC_SOON_H Stunden oder SVC_SOON_D Tage davor.
+// Das ist ein Hinweis, kein Status: Farbe Violett nur für Service, nie die Status-Farben, und immer auch als Text.
+const SVC_SOON_H = 20, SVC_SOON_D = 7;
+const SVC_RANK = { due:0, soon:1, ok:2, none:3 };
+function daysUntil(iso){
+  const p = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+  if(!p) return null;
+  const d = new Date(+p[1], +p[2] - 1, +p[3]), t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return Math.round((d - t) / 864e5);
+}
+function dateCh(iso){
+  const p = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+  return p ? p[3] + "." + p[2] + "." + p[1] : "";
+}
+function isoDay(offsetDays){                      // heute plus n Tage als JJJJ-MM-TT (Demo)
+  const d = new Date(); d.setDate(d.getDate() + offsetDays);
+  return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+}
+function serviceInfo(m){
+  const parts = []; let state = "none";
+  const up = s => { if(SVC_RANK[s] < SVC_RANK[state]) state = s; };
+  const h = m.h || 0, hs = m.hs || 0;
+  let left = null;
+  if(wartungOk && m.iv){
+    left = m.iv - (h - hs);
+    if(left < 0){ up("due"); parts.push("Service fällig seit " + (-left) + " Std."); }
+    else if(left === 0){ up("due"); parts.push("Service jetzt fällig"); }
+    else { up(left <= SVC_SOON_H ? "soon" : "ok"); parts.push("Service in " + left + " Std."); }
+  }
+  const dd = wartungOk && m.due ? daysUntil(m.due) : null;
+  if(dd !== null){
+    if(dd < 0){ up("due"); parts.push("Service-Termin überfällig seit " + (-dd) + (dd === -1 ? " Tag" : " Tagen")); }
+    else if(dd === 0){ up("due"); parts.push("Service-Termin heute"); }
+    else { up(dd <= SVC_SOON_D ? "soon" : "ok"); parts.push("Service-Termin " + dateCh(m.due) + (dd <= SVC_SOON_D ? " (in " + dd + (dd === 1 ? " Tag" : " Tagen") + ")" : "")); }
+  }
+  return { state, text:parts.join(" · "), left, days:dd };
+}
+
+async function setService(m, v){                  // v: { h, hs, iv, due }
+  const before = { h:m.h, hs:m.hs, iv:m.iv, due:m.due };
+  if(LIVE && !wartungOk){ toast("Wartung nicht gespeichert: Datenbank-Update nötig (schema.sql erneut ausführen).", true); return false; }
+  Object.assign(m, v);
+  render();
+  if(LIVE){
+    const r = await sb.from("machines").update({ stunden:v.h, service_stunden:v.hs, service_intervall:v.iv, service_termin:v.due }).eq("id", m.id).select().single();
+    if(r.error){ Object.assign(m, before); render(); toast("Wartung konnte nicht gespeichert werden: " + r.error.message, true); return false; }
+    upsertMachine(mapMachine(r.data));
+  }
+  return true;
+}
+
+function modalService(m){
+  const body = el("div", "form");
+  const intOrNull = x => { const t = String(x).trim(); return t === "" ? null : (/^\d{1,6}$/.test(t) ? Number(t) : NaN); };
+  const nf = (id, v, max)=>{ const i = input("number", v === null || v === undefined ? "" : String(v), id); i.min = "0"; i.max = String(max); i.step = "1"; i.inputMode = "numeric"; return i; };
+  const fH = nf("sv-h", m.h || 0, 999999), fIv = nf("sv-iv", m.iv, 99999), fHs = nf("sv-hs", m.hs || 0, 999999);
+  const fDue = input("date", m.due || "", "sv-due");
+  body.appendChild(field("Betriebsstunden (Zählerstand der Maschine)", fH));
+  body.appendChild(field("Service-Intervall in Stunden (leer = keines)", fIv));
+  body.appendChild(field("Zählerstand beim letzten Service", fHs));
+  body.appendChild(field("Nächster Service-Termin (leer = keiner)", fDue));
+  const info = el("div", "svc"); info.id = "sv-info"; body.appendChild(info);
+  body.appendChild(el("div", "muted", "Die Stunden trägt jemand von Hand ein. Es gibt keine Messung an der Maschine."));
+  const msg = el("div", "msg"); msg.id = "sv-msg"; body.appendChild(msg);
+  const read = ()=>{
+    const h = intOrNull(fH.value), hs = intOrNull(fHs.value), iv = intOrNull(fIv.value);
+    const due = fDue.value || null;
+    if(h === null || Number.isNaN(h) || hs === null || Number.isNaN(hs)) return { err:"Betriebsstunden und Zählerstand beim letzten Service müssen ganze Zahlen von 0 bis 999999 sein." };
+    if(Number.isNaN(iv) || (iv !== null && (iv < 1 || iv > 99999))) return { err:"Das Intervall muss eine ganze Zahl von 1 bis 99999 sein oder leer bleiben." };
+    if(hs > h) return { err:"Der Zählerstand beim letzten Service kann nicht höher sein als die Betriebsstunden." };
+    if(due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return { err:"Das Datum ist ungültig." };
+    return { v:{ h, hs, iv, due } };
+  };
+  const preview = ()=>{
+    const r = read();
+    if(r.err){ info.textContent = ""; return; }
+    const i = serviceInfo(Object.assign({}, m, r.v));
+    info.textContent = i.text || "Kein Intervall und kein Termin eingetragen.";
+    info.className = "svc" + (i.state === "due" ? " due" : "");
+  };
+  [fH, fIv, fHs, fDue].forEach(x => x.addEventListener("input", preview));
+  preview();
+  const save = el("button", "primary", "Speichern"); save.type = "button"; save.id = "sv-save";
+  const done = el("button", "", "Service erledigt"); done.type = "button"; done.id = "sv-done";
+  done.title = "Setzt den Zählerstand beim letzten Service auf die aktuellen Betriebsstunden und löscht den Termin";
+  save.onclick = async ()=>{
+    const r = read();
+    if(r.err){ msg.className = "msg err"; msg.textContent = r.err; return; }
+    save.disabled = done.disabled = true;
+    const ok = await setService(m, r.v);
+    save.disabled = done.disabled = false;
+    if(ok) closeModal();
+  };
+  done.onclick = async ()=>{
+    const r = read();
+    if(r.err){ msg.className = "msg err"; msg.textContent = r.err; return; }
+    save.disabled = done.disabled = true;
+    const ok = await setService(m, { h:r.v.h, hs:r.v.h, iv:r.v.iv, due:null });
+    save.disabled = done.disabled = false;
+    if(ok){ addLog("Service erledigt: " + m.name + " bei " + r.v.h + " Std." + where(m)); closeModal(); render(); }
+  };
+  const row = el("div", "acts"); row.appendChild(save); row.appendChild(done); body.appendChild(row);
+  openModal("Wartung: " + m.name, body);
+}
+
 /* =============================================================== Daten: Anlegen und Löschen */
 const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, lat:r.lat, lng:r.lng,
   extra:(Array.isArray(r.weitere_sparten) ? r.weitere_sparten : []).filter(k => SPARTEN[k] && k !== r.sparte) });
@@ -659,7 +779,9 @@ const spartenText = s => spartenOf(s).map(k => SPARTEN[k]).join(" + ");
 // Eine Baustelle ist sichtbar, wenn eine ihrer Sparten im Filter gewählt ist
 const showSite = s => spartenOf(s).some(showSparte);
 let spartenOk = true;  // false, wenn die Datenbank die Spalte weitere_sparten noch nicht hat (schema.sql erneut ausführen)
-const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "", by:r.reported_name || "", at:r.reported_at || null });
+const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "", by:r.reported_name || "", at:r.reported_at || null,
+  h:Number(r.stunden) || 0, hs:Number(r.service_stunden) || 0, iv:r.service_intervall ? Number(r.service_intervall) : null, due:r.service_termin || null });
+let wartungOk = true;  // false, wenn die Datenbank die Wartungs-Spalten noch nicht hat (schema.sql erneut ausführen)
 
 const mapNeed = r => ({ id:r.id, site:r.site_id, text:r.text, author:r.author || "", createdBy:r.created_by, createdAt:r.created_at, done:!!r.done, doneBy:r.done_by || "" });
 function upsertNeed(n){
@@ -801,7 +923,7 @@ async function addNeeds(s, texts){
 async function createMachine(v){
   const status = v.site ? "running" : "off";
   if(!LIVE){
-    machines.push({ id:"n" + (++localId), name:v.name, typ:v.typ, sparte:v.sparte, site:v.site, status, reason:"" });
+    machines.push({ id:"n" + (++localId), name:v.name, typ:v.typ, sparte:v.sparte, site:v.site, status, reason:"", h:0, hs:0, iv:null, due:null });
     addLog("Neue Maschine: " + v.name); render();
     return true;
   }
@@ -1312,6 +1434,8 @@ function renderDetail(){
     t.appendChild(el("div", "muted", (m.typ ? m.typ + " · " : "") + state));
     const who = reportedBy(m);
     if(who) t.appendChild(el("div", "muted who", who));
+    const sv = serviceInfo(m);
+    if(sv.state !== "none") t.appendChild(el("div", "svc" + (sv.state === "due" ? " due" : ""), sv.text));
     r.appendChild(t);
     const acts = el("div", "acts");
     const add = (label, fn, cls)=>{ const b = el("button", cls || "", label); b.onclick = fn; acts.appendChild(b); };
@@ -1325,6 +1449,7 @@ function renderDetail(){
       add(m.reason.indexOf("Material") === 0 ? "Nachgeliefert" : "Getankt", ()=>resolve(m));
     }
     if(m.site) add("Werkhof", ()=>toDepot(m));
+    if(wartungOk || !LIVE){ const wb = el("button", "", "Wartung"); wb.type = "button"; wb.setAttribute("data-wartung", String(m.id)); wb.onclick = ()=>modalService(m); acts.appendChild(wb); }
     if(isAdmin()) acts.appendChild(confirmBtn("Löschen", "m:" + m.id, ()=>deleteMachine(m)));
     r.appendChild(acts);
     box.appendChild(r);
@@ -1397,6 +1522,13 @@ function render(){
     chip.appendChild(el("span", "", SHORT[k] + ": " + c[k]));
     counts.appendChild(chip);
   });
+  const svcDue = vm.filter(m => serviceInfo(m).state === "due").sort(byName);
+  if(svcDue.length){
+    const chip = el("span", "chip svcchip"); chip.title = "Maschinen mit fälligem Service";
+    chip.appendChild(el("span", "dot svc"));
+    chip.appendChild(el("span", "", "Service fällig: " + svcDue.length));
+    counts.appendChild(chip);
+  }
 
   const active = vm.length - c.off;
   const health = active ? Math.round(100 * c.running / active) : 100;
@@ -1413,6 +1545,13 @@ function render(){
     banner.className = "show";
     banner.textContent = "⚠ Störung: " + bad.slice(0, 6).map(m => m.name + where(m)).join(", ") + (bad.length > 6 ? " und " + (bad.length - 6) + " weitere" : "");
   } else banner.className = "";
+
+  // Hinweis Service (ruhig, ohne Blinken und ohne Ton; die Status-Farben bleiben für Störungen)
+  const sb2 = $("svcBanner");
+  if(svcDue.length){
+    sb2.className = "show";
+    sb2.textContent = "Service fällig: " + svcDue.slice(0, 5).map(m => m.name + where(m)).join(", ") + (svcDue.length > 5 ? " und " + (svcDue.length - 5) + " weitere" : "");
+  } else sb2.className = "";
 
   // Probleme
   const probs = vm.filter(m => m.status === "broken" || m.status === "waiting");
@@ -3403,8 +3542,9 @@ function tableMachines(){
     const wo = m.site ? (site ? site.name : "Baustelle gelöscht") : "Werkhof";
     const reason = m.status === "broken" ? (m.reason ? "Defekt: " + m.reason : "Defekt") : m.status === "waiting" ? m.reason : "";
     const by = (m.status === "broken" || m.status === "waiting") && m.by ? m.by : "";
-    return { id:m.id, m, status:m.status, name:m.name, typ:m.typ || "", sparte:m.sparte ? TAG[m.sparte] : "", wo, reason, by, at:by ? m.at : null,
-      siteId:loc(m), text:[m.name, m.typ, wo, reason, by, m.sparte ? SPARTEN[m.sparte] : ""].join(" ").toLowerCase() };
+    const sv = serviceInfo(m);
+    return { id:m.id, m, status:m.status, name:m.name, typ:m.typ || "", sparte:m.sparte ? TAG[m.sparte] : "", wo, reason, by, at:by ? m.at : null, sv, h:m.h || 0,
+      siteId:loc(m), text:[m.name, m.typ, wo, reason, by, m.sparte ? SPARTEN[m.sparte] : "", sv.text].join(" ").toLowerCase() };
   });
 }
 
@@ -3423,7 +3563,9 @@ const TBL_COLS = {
     { k:"sparte", t:"Sparte", cmp:(a, b) => a.sparte.localeCompare(b.sparte) },
     { k:"wo", t:"Wo", cmp:(a, b) => (a.wo === "Werkhof") - (b.wo === "Werkhof") || a.wo.localeCompare(b.wo, "de") },
     { k:"reason", t:"Grund", cmp:(a, b) => (!a.reason) - (!b.reason) || a.reason.localeCompare(b.reason, "de") },
-    { k:"by", t:"Gemeldet", cmp:(a, b) => (!a.at) - (!b.at) || String(b.at || "").localeCompare(String(a.at || "")) }
+    { k:"by", t:"Gemeldet", cmp:(a, b) => (!a.at) - (!b.at) || String(b.at || "").localeCompare(String(a.at || "")) },
+    { k:"h", t:"Betriebsstunden", cmp:(a, b) => a.h - b.h },
+    { k:"service", t:"Service", cmp:(a, b) => SVC_RANK[a.sv.state] - SVC_RANK[b.sv.state] || (a.sv.left === null ? 1e9 : a.sv.left) - (b.sv.left === null ? 1e9 : b.sv.left) }
   ]
 };
 
@@ -3459,6 +3601,11 @@ function tableCell(tab, k, r){
     if(k === "status") td.appendChild(stCell(r.status, SHORT[r.status]));
     else if(k === "name") td.appendChild(el("strong", "", r.name));
     else if(k === "sparte") td.appendChild(el("span", "tag", r.sparte || "?"));
+    else if(k === "h"){ td.appendChild(el("span", r.h ? "" : "sm", r.h ? r.h + " Std." : "–")); if(!r.h) td.className = "nil"; }
+    else if(k === "service"){
+      if(r.sv.state === "none"){ td.appendChild(el("span", "sm", "–")); td.className = "nil"; }
+      else td.appendChild(el("span", "svc" + (r.sv.state === "due" ? " due" : ""), r.sv.text));
+    }
     else if(k === "by"){ if(r.by){ const b = el("div"); b.appendChild(el("div", "", r.by)); if(r.at) b.appendChild(el("div", "sm", whenText(r.at))); td.appendChild(b); } else { td.appendChild(el("span", "sm", "–")); td.className = "nil"; } }
     else { td.appendChild(el("span", r[k] ? "" : "sm", r[k] || "–")); if(!r[k]) td.className = "nil"; }
   }
@@ -3938,7 +4085,8 @@ async function loadAll(){
     sb.from("materials").select("*").order("name").limit(1000),
     sb.from("sites").select("weitere_sparten").limit(1),
     sb.from("drawings").select("*").order("created_at").limit(5000),
-    sb.from("drawings").select("seite").limit(1)
+    sb.from("drawings").select("seite").limit(1),
+    sb.from("machines").select("stunden").limit(1)
   ]);
   const err = res[0].error || res[1].error || res[2].error;
   if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
@@ -3948,6 +4096,7 @@ async function loadAll(){
   needsOk = !res[3].error;
   needs = needsOk ? res[3].data.map(mapNeed) : [];
   spartenOk = !res[5].error;
+  wartungOk = !res[8].error;                                           // ohne die Spalten läuft alles, nur ohne Wartung
   drawingsOk = !res[6].error;
   seiteOk = drawingsOk && !res[7].error;                              // ohne Tabelle drawings: Liste mit Hinweis, alles andere läuft
   drawings = drawingsOk ? res[6].data.map(mapDrawing) : [];                               // ohne Spalte weitere_sparten: nur die Hauptsparte
