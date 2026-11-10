@@ -184,6 +184,15 @@
   .tblsort{display:none}
   .tblnote{font-size:12px;margin:0 0 8px}
   .tblwrap{max-height:65vh;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  table.infotbl{width:100%;border-collapse:collapse;font-size:14px}
+  .infotbl tr.grp th{text-align:left;padding:14px 4px 4px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .infotbl td{padding:4px;border-top:1px solid var(--line);vertical-align:middle}
+  .infotbl label{display:block;padding:7px 0;cursor:pointer}
+  .infotbl .idesc{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+  .infotbl td.sw{width:52px;text-align:right}
+  .infotbl input[type=checkbox]{width:26px;height:26px;accent-color:#4a90d9}
+  .infohint{color:var(--muted);font-size:12.5px;margin:8px 0}
+  .inforow{display:flex;gap:8px;margin:12px 0 4px}
   table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   .tbl th{position:sticky;top:0;z-index:1;background:var(--panel);text-align:left;padding:0;border-bottom:1px solid var(--line);white-space:nowrap}
   .tbl th button{background:none;border:0;border-radius:0;width:100%;text-align:left;padding:9px 10px;font-weight:600;color:var(--muted)}
@@ -294,7 +303,9 @@
           <option value="hell">Karte: Hell</option>
           <option value="dunkel">Karte: Dunkel</option>
           <option value="luftbild">Karte: Luftbild</option>
+          <option value="landeskarte">Karte: Landeskarte</option>
         </select>
+        <button id="btnInfos">Ebenen</button>
       </div>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <path d="M0 42 C 25 36, 45 58, 100 34" fill="none" stroke="#243140" stroke-width="3" vector-effect="non-scaling-stroke"/>
@@ -1976,17 +1987,24 @@ let blinkTimer = null, blinkOn = true;
 
 /* Karte hell (Standard, wie Google Maps) oder dunkel. Die Wahl wird im Gerät gemerkt.
    Die dunkle Karte wird beim Laden umgefärbt, nie per CSS-Filter (sonst stimmen die Statusfarben nicht). */
-let mapTheme = (()=>{ try{ const v = localStorage.getItem("karte"); return v === "dunkel" || v === "luftbild" ? v : "hell"; }catch(e){ return "hell"; } })();
-function styleBasemap(){ if(mapTheme === "dunkel") darkenBasemap(); else if(mapTheme === "luftbild") photoBasemap(); else lightenBasemap(); }
+let mapTheme = (()=>{ try{ const v = localStorage.getItem("karte"); return v === "dunkel" || v === "luftbild" || v === "landeskarte" ? v : "hell"; }catch(e){ return "hell"; } })();
+const rasterTheme = () => mapTheme === "luftbild" || mapTheme === "landeskarte";      // Bild von swisstopo statt gezeichneter Karte
+function styleBasemap(){ if(mapTheme === "dunkel") darkenBasemap(); else if(rasterTheme()) photoBasemap(); else lightenBasemap(); }
+// Landeskarte von swisstopo (gedruckte Karte mit Höhenlinien, Wegen, Gewässern, Wald), frei ohne Schlüssel, Quellenangabe Pflicht
+const TOPO_TILES = "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg";
+// Grundstücksgrenzen der amtlichen Vermessung (Kantone, über swisstopo), als durchsichtige Ebene über jeder Karte
+const PARCEL_TILES = "https://wmts.geo.admin.ch/1.0.0/ch.kantone.cadastralwebmap-farbe/default/current/3857/{z}/{x}/{y}.png";
 /* Luftbild: SWISSIMAGE von swisstopo (etwa 10 cm genau, frei nutzbar ohne Schlüssel, Quelle muss genannt werden).
    Darauf sieht man die echten Fahrbahnen mit Markierungen und Abbiegepfeilen. Stand der Aufnahme: einige Jahre alt möglich. */
 const PHOTO_TILES = "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg";
 function photoBasemap(){
   const layers = (lmap.getStyle() || {}).layers || [];
   const first = layers.find(l => l.type === "symbol");
-  lmap.addSource("luftbild", { type:"raster", tiles:[PHOTO_TILES], tileSize:256, maxzoom:19, attribution:"© swisstopo" });
+  const topo = mapTheme === "landeskarte";
+  lmap.addSource("luftbild", { type:"raster", tiles:[topo ? TOPO_TILES : PHOTO_TILES], tileSize:256, maxzoom:topo ? 18 : 19, attribution:"© swisstopo" });
   lmap.addLayer({ id:"luftbild", type:"raster", source:"luftbild" }, first ? first.id : undefined);
   layers.forEach(l=>{                                              // Namen auf dem Foto: weiss mit dunklem Rand, gut lesbar
+    if(topo && l.type === "symbol"){ try{ lmap.setLayoutProperty(l.id, "visibility", "none"); }catch(e){} return; }   // die Landeskarte hat eigene Namen
     if(l.type === "symbol" && l.layout && l.layout["text-field"]){
       try{ lmap.setPaintProperty(l.id, "text-color", "#ffffff"); lmap.setPaintProperty(l.id, "text-halo-color", "#0f1419"); }catch(e){}
     }
@@ -2292,6 +2310,184 @@ function treeIconUrl(){
   svg.appendChild(sv("circle", { cx:24, cy:24, r:3, fill:"#3a2a1a" }));
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(svg));
 }
+/* ===== Ebenen der Karte: alles einzeln ein- und ausschaltbar (Knopf "Ebenen"), im Gerät gemerkt =====
+   layers = Ebenen der Karte, die es schon gibt. ks = Arten aus OpenStreetMap (Punkte, live über Overpass geholt, siehe osmLoad).
+   Farben der Zeichen: dunkel auf weiss, nie Statusfarben. */
+const INFOS = [
+  { id:"richtung", g:"Strasse", t:"Fahrtrichtungen", d:"Pfeile je Fahrtrichtung, Einbahnstrassen", on:true, layers:["road-dir-one", "road-dir-hin", "road-dir-her"] },
+  { id:"zebra",    g:"Strasse", t:"Fussgängerstreifen", d:"Zebrastreifen und andere Übergänge", on:true, ks:["zebra"], z:16 },
+  { id:"ampel",    g:"Strasse", t:"Ampeln", d:"Lichtsignale", on:true, ks:["ampel"], z:15.5 },
+  { id:"vortritt", g:"Strasse", t:"Stopp und kein Vortritt", d:"Signale an Einmündungen", on:true, ks:["stop", "vortritt"], z:16 },
+  { id:"kreisel",  g:"Strasse", t:"Kreisel", d:"Kreisverkehr", on:true, ks:["kreisel"], z:15 },
+  { id:"tempo",    g:"Strasse", t:"Tempolimits", d:"Höchstgeschwindigkeit je Strassenstück", on:true, ks:["tempo"], z:16 },
+  { id:"bus",      g:"Strasse", t:"Bushaltestellen", d:"mit Namen", on:true, ks:["bus"], z:15.5 },
+  { id:"parken",   g:"Strasse", t:"Parkplätze", d:"", on:false, ks:["parken"], z:16 },
+  { id:"schacht",  g:"Tiefbau", t:"Schächte", d:"Schachtdeckel, soweit in OpenStreetMap erfasst (oft lückenhaft)", on:false, ks:["schacht"], z:17 },
+  { id:"hydrant",  g:"Tiefbau", t:"Hydranten", d:"soweit erfasst", on:false, ks:["hydrant"], z:16.5 },
+  { id:"lampe",    g:"Tiefbau", t:"Strassenlampen", d:"soweit erfasst", on:false, ks:["lampe"], z:17 },
+  { id:"parzellen", g:"Tiefbau", t:"Grundstücksgrenzen", d:"Amtliche Vermessung (swisstopo, Kantone), nur zur Übersicht", on:false, layers:["parzellen"] },
+  { id:"baum",     g:"Gartenbau", t:"Bäume", d:"einzelne Bäume, soweit erfasst", on:false, ks:["baum"], z:17 },
+  { id:"haeuser",  g:"Karte", t:"3D-Häuser", d:"", on:true, layers:["bauten"] },
+  { id:"relief",   g:"Karte", t:"Relief", d:"Schattierung des Geländes", on:true, layers:["relief"] },
+  { id:"zeichnungen", g:"Baustellen", t:"Zeichnungen", d:"Strassen, Leitungen, Bäume, Flächen der Baustellen", on:true,
+    layers:["dr-belag", "dr-rasen", "dr-area-line", "dr-strasse", "dr-ern-full", "dr-ern-full-w", "dr-ern-half", "dr-ern-half-w", "dr-ern-dir", "dr-line", "dr-leitung", "dr-tree", "dr-label", "dr-label-area"] },
+  { id:"maschinen", g:"Baustellen", t:"Maschinen", d:"Bilder, 3D-Modelle und Namen", on:true, layers:["mach-3d", "mach-ring", "mach-label", "mach-icon", "mach-icon-text"] }
+];
+let infoOn = (()=>{ let s = {}; try{ s = JSON.parse(localStorage.getItem("karteInfos") || "{}") || {}; }catch(e){}
+  const o = {}; INFOS.forEach(i => { o[i.id] = typeof s[i.id] === "boolean" ? s[i.id] : i.on; }); return o; })();
+function applyInfos(){
+  if(!lmap || !mapReady) return;
+  INFOS.forEach(i=>{
+    (i.layers || ["osm-" + i.id]).forEach(id=>{ if(lmap.getLayer(id)) lmap.setLayoutProperty(id, "visibility", infoOn[i.id] ? "visible" : "none"); });
+  });
+  osmLoad();
+}
+function setInfo(id, on){
+  infoOn[id] = on;
+  try{ localStorage.setItem("karteInfos", JSON.stringify(infoOn)); }catch(e){}
+  applyInfos();
+}
+/* Punkte aus OpenStreetMap (Zebrastreifen, Ampeln, Schächte, Bäume usw.) stehen nicht in den Kartenkacheln. Sie werden für den
+   sichtbaren Ausschnitt beim Dienst Overpass geholt (gratis, ohne Schlüssel, Fair Use): erst ab Zoom 15, je Feld von etwa
+   1.5 km nur einmal, eine Anfrage nach der anderen. Gesendet wird nur der Kartenausschnitt, nie Daten der Firma.
+   Fällt der Dienst aus, fehlen nur diese Zeichen, die Karte läuft weiter. */
+const OSM_URL = "https://overpass-api.de/api/interpreter", OSM_CELL = 14, OSM_MAX = 30000;
+let osmCells = {}, osmFeat = [], osmSeen = {}, osmBusy = false, osmState = "", osmTimer = 0;
+const osmWanted = () => INFOS.some(i => i.ks && infoOn[i.id]);
+function osmQuery(s, w, n, e){
+  const b = "(" + [s, w, n, e].map(v => v.toFixed(5)).join(",") + ")";
+  return "[out:json][timeout:25];(" +
+    'node["highway"~"^(crossing|traffic_signals|bus_stop|stop|give_way|street_lamp|mini_roundabout)$"]' + b + ";" +
+    'node["man_made"="manhole"]' + b + ';node["emergency"="fire_hydrant"]' + b + ';node["natural"="tree"]' + b + ";" +
+    'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)$"]["maxspeed"]' + b + ";" +
+    'way["junction"="roundabout"]' + b + ';nwr["amenity"="parking"]' + b + ";);out center tags qt;";
+}
+// Ein Element von OpenStreetMap -> Art und kurzer Text (oder null, wenn es nicht gezeigt wird)
+function osmKind(tg){
+  const h = tg.highway;
+  if(h === "crossing") return ["zebra", ""];
+  if(h === "traffic_signals") return ["ampel", ""];
+  if(h === "bus_stop") return ["bus", String(tg.name || "").slice(0, 40)];
+  if(h === "stop") return ["stop", ""];
+  if(h === "give_way") return ["vortritt", ""];
+  if(h === "street_lamp") return ["lampe", ""];
+  if(h === "mini_roundabout" || tg.junction === "roundabout") return ["kreisel", ""];
+  if(tg.man_made === "manhole") return ["schacht", ""];
+  if(tg.emergency === "fire_hydrant") return ["hydrant", ""];
+  if(tg.natural === "tree") return ["baum", ""];
+  if(tg.amenity === "parking") return ["parken", ""];
+  if(h && /^[0-9]{1,3}$/.test(String(tg.maxspeed || ""))) return ["tempo", String(tg.maxspeed)];
+  return null;
+}
+function osmAdd(json){
+  ((json && json.elements) || []).forEach(x=>{
+    const key = x.type + x.id; if(osmSeen[key] || osmFeat.length >= OSM_MAX) return;
+    const lat = x.lat != null ? x.lat : x.center && x.center.lat, lon = x.lon != null ? x.lon : x.center && x.center.lon;
+    const k = osmKind(x.tags || {});
+    if(!k || typeof lat !== "number" || typeof lon !== "number") return;
+    osmSeen[key] = 1;
+    osmFeat.push({ type:"Feature", geometry:{ type:"Point", coordinates:[lon, lat] }, properties:{ k:k[0], t:k[1] } });
+  });
+  const src = lmap && lmap.getSource("osm"); if(src) src.setData({ type:"FeatureCollection", features:osmFeat });
+}
+function osmLoad(){
+  clearTimeout(osmTimer);
+  if(!lmap || !mapReady || osmBusy || !osmWanted() || lmap.getZoom() < 15 || typeof fetch !== "function") return;
+  const b = lmap.getBounds(), n = Math.pow(2, OSM_CELL);
+  const tx = lng => Math.floor((lng + 180) / 360 * n);
+  const ty = lat => { const r = lat * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n); };
+  const lngOf = x => x / n * 360 - 180, latOf = y => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+  const x0 = tx(b.getWest()), x1 = tx(b.getEast()), y0 = ty(b.getNorth()), y1 = ty(b.getSouth());
+  if((x1 - x0 + 1) * (y1 - y0 + 1) > 9) return;                   // sehr flacher Blick über ein grosses Gebiet: nichts holen
+  let cell = null;
+  for(let x = x0; x <= x1 && !cell; x++) for(let y = y0; y <= y1 && !cell; y++){
+    const st = osmCells[x + "/" + y];
+    if(!st || (st.err && Date.now() - st.err > 60000)) cell = [x, y];
+  }
+  if(!cell) return;
+  const key = cell[0] + "/" + cell[1], m = lmap;
+  osmBusy = true; osmCells[key] = { busy:1 }; osmState = "lädt"; infosRefresh();
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const kill = setTimeout(()=>{ if(ctl) ctl.abort(); }, 30000);
+  fetch(OSM_URL, { method:"POST", body:"data=" + encodeURIComponent(osmQuery(latOf(cell[1] + 1), lngOf(cell[0]), latOf(cell[1]), lngOf(cell[0] + 1))),
+                   headers:{ "Content-Type":"application/x-www-form-urlencoded" }, signal:ctl ? ctl.signal : undefined })
+    .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(j => { osmCells[key] = { ok:1 }; osmState = "geladen"; if(lmap === m) osmAdd(j); })
+    .catch(()=>{ osmCells[key] = { err:Date.now() }; osmState = "nicht erreichbar"; })
+    .then(()=>{ clearTimeout(kill); osmBusy = false; infosRefresh(); if(lmap === m) osmTimer = setTimeout(osmLoad, 1200); });
+}
+// Zeichen für die Punkte aus OpenStreetMap: weisses Schild mit dunklem Bild (keine Statusfarben)
+function osmIconUrl(k){
+  const svg = sv("svg", { xmlns:SVGNS, width:44, height:44, viewBox:"0 0 44 44" }), ink = "#26303b";
+  const add = (tag, a) => { const n = sv(tag, a); svg.appendChild(n); return n; };
+  const txt = (s, size) => { add("text", { x:22, y:22 + size * 0.36, "text-anchor":"middle", "font-family":"Arial, Helvetica, sans-serif", "font-weight":"bold", "font-size":size, fill:ink }).textContent = s; };
+  if(k === "tempo"){ add("circle", { cx:22, cy:22, r:18, fill:"#ffffff", stroke:ink, "stroke-width":4 }); }
+  else if(k === "vortritt"){ add("path", { d:"M4 7 H40 L22 39 Z", fill:"#ffffff", stroke:ink, "stroke-width":4, "stroke-linejoin":"round" }); }
+  else if(k === "stop"){ add("path", { d:"M14 3 H30 L41 14 V30 L30 41 H14 L3 30 V14 Z", fill:ink, stroke:"#ffffff", "stroke-width":2 });
+    add("text", { x:22, y:27, "text-anchor":"middle", "font-family":"Arial, Helvetica, sans-serif", "font-weight":"bold", "font-size":13, fill:"#ffffff" }).textContent = "STOP"; }
+  else {
+    add("rect", { x:3, y:3, width:38, height:38, rx:9, fill:"#ffffff", stroke:ink, "stroke-width":3 });
+    if(k === "zebra") [9, 16.5, 24, 31.5].forEach(x => add("rect", { x:x, y:10, width:4.5, height:24, fill:ink }));
+    else if(k === "ampel"){ add("rect", { x:15, y:7, width:14, height:30, rx:4, fill:ink }); [13, 22, 31].forEach(y => add("circle", { cx:22, cy:y, r:3.2, fill:"#ffffff" })); }
+    else if(k === "kreisel"){ add("circle", { cx:22, cy:22, r:10, fill:"none", stroke:ink, "stroke-width":5, "stroke-dasharray":"15 6" }); }
+    else if(k === "bus") txt("H", 26);
+    else if(k === "parken") txt("P", 26);
+    else if(k === "hydrant") txt("Hy", 19);
+    else if(k === "schacht"){ add("circle", { cx:22, cy:22, r:12, fill:"none", stroke:ink, "stroke-width":3.5 }); add("path", { d:"M13.5 13.5 L30.5 30.5 M30.5 13.5 L13.5 30.5", stroke:ink, "stroke-width":3 }); }
+    else if(k === "lampe"){ add("path", { d:"M17 36 V14 Q17 9 24 9 H30", fill:"none", stroke:ink, "stroke-width":3.5, "stroke-linecap":"round" }); add("circle", { cx:30, cy:13, r:4.5, fill:ink }); }
+  }
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+}
+const OSM_ICONS = ["zebra", "ampel", "stop", "vortritt", "kreisel", "tempo", "bus", "parken", "schacht", "hydrant", "lampe"];
+function osmLayers(font){
+  return INFOS.filter(i => i.ks).map(i=>{
+    const l = { id:"osm-" + i.id, type:"symbol", source:"osm", minzoom:i.z, filter:["match", ["get", "k"], i.ks, true, false],
+      layout:{ "icon-image":i.id === "baum" ? "baum" : ["concat", "osm-", ["get", "k"]], "icon-allow-overlap":true, "icon-ignore-placement":true,
+               "icon-size":["interpolate", ["linear"], ["zoom"], 15, 0.6, 19, i.id === "baum" ? 0.8 : 1.2], "visibility":infoOn[i.id] ? "visible" : "none" },
+      paint:{} };
+    if(i.id === "tempo"){ Object.assign(l.layout, { "text-field":["get", "t"], "text-font":font, "text-size":["interpolate", ["linear"], ["zoom"], 15, 7, 19, 12], "text-allow-overlap":true, "text-ignore-placement":true });
+      l.paint = { "text-color":"#26303b" }; }
+    if(i.id === "bus"){ Object.assign(l.layout, { "text-field":["get", "t"], "text-font":font, "text-size":11, "text-anchor":"top", "text-offset":[0, 1.1], "text-optional":true });
+      l.paint = Object.assign({ "text-halo-width":1.5 }, labelInk()); }
+    return l;
+  });
+}
+/* Fenster "Ebenen": Tabelle aller Informationen mit Schalter */
+let infosRefresh = ()=>{};
+function modalInfos(){
+  const body = el("div");
+  body.appendChild(el("p", "infohint", "Wähle, was die Karte zeigt. Die Auswahl bleibt in diesem Gerät gespeichert. Die meisten Zeichen erscheinen erst, wenn du nah heranzoomst."));
+  const st = el("p", "infohint"); st.id = "infoState"; body.appendChild(st);
+  const tbl = el("table", "infotbl"), tb = el("tbody");
+  let grp = "";
+  INFOS.forEach(i=>{
+    if(i.g !== grp){ grp = i.g; const r = el("tr", "grp"); const th = el("th", "", grp); th.colSpan = 2; r.appendChild(th); tb.appendChild(r); }
+    const r = el("tr"), c1 = el("td"), c2 = el("td", "sw");
+    const lab = el("label"); lab.htmlFor = "info-" + i.id;
+    lab.appendChild(el("strong", "", i.t));
+    if(i.d) lab.appendChild(el("span", "idesc", i.d));
+    c1.appendChild(lab);
+    const cb = input("checkbox", "", "info-" + i.id); cb.checked = !!infoOn[i.id];
+    cb.onchange = ()=>setInfo(i.id, cb.checked);
+    c2.appendChild(cb); r.appendChild(c1); r.appendChild(c2); tb.appendChild(r);
+  });
+  tbl.appendChild(tb); body.appendChild(tbl);
+  const row = el("div", "inforow");
+  const all = el("button", "", "Alle ein"); all.type = "button"; all.id = "infoAll";
+  const none = el("button", "", "Alle aus"); none.type = "button"; none.id = "infoNone";
+  const setAll = v => { INFOS.forEach(i => { infoOn[i.id] = v; const c = $("info-" + i.id); if(c) c.checked = v; }); setInfo(INFOS[0].id, v); };
+  all.onclick = ()=>setAll(true); none.onclick = ()=>setAll(false);
+  row.appendChild(all); row.appendChild(none); body.appendChild(row);
+  body.appendChild(el("p", "infohint", "Quellen: © OpenStreetMap-Mitwirkende (Strassen, Zeichen), © swisstopo und Kantone (Grundstücke, Luftbild, Landeskarte). Die Angaben können unvollständig oder veraltet sein und ersetzen keine Signalisation vor Ort und keinen Werkleitungsplan."));
+  infosRefresh = ()=>{
+    const s = $("infoState"); if(!s){ infosRefresh = ()=>{}; return; }
+    s.textContent = !osmWanted() ? "" : !lmap || !mapReady ? "" : lmap.getZoom() < 15 ? "Zeichen aus OpenStreetMap: näher heranzoomen, dann werden sie geladen."
+      : "Zeichen aus OpenStreetMap: " + (osmState || "bereit") + (osmFeat.length ? " (" + osmFeat.length + " Punkte)" : "") + ".";
+  };
+  openModal("Ebenen der Karte", body);
+  infosRefresh();
+}
+
 // Pfeil in Fahrtrichtung (zeigt nach rechts, MapLibre dreht ihn entlang der Strasse)
 function arrowIconUrl(fill, edge){
   const svg = sv("svg", { xmlns:SVGNS, width:40, height:40, viewBox:"0 0 40 40" });
@@ -2340,7 +2536,7 @@ function addHatch(){
 }
 
 // Schrift auf der Karte: auf heller Karte dunkel mit weissem Rand, sonst weiss mit dunklem Rand
-const labelInk = () => mapTheme === "hell" ? { "text-color":"#1f2328", "text-halo-color":"#ffffff" } : { "text-color":"#ffffff", "text-halo-color":"#0f1419" };
+const labelInk = () => mapTheme === "hell" || mapTheme === "landeskarte" ? { "text-color":"#1f2328", "text-halo-color":"#ffffff" } : { "text-color":"#ffffff", "text-halo-color":"#0f1419" };
 function addMapLayers(){
   const style = lmap.getStyle() || {};
   /* Reihenfolge wichtig für das Gelände (3D): Flächen und Linien liegen alle zusammen direkt unter der ersten Schrift
@@ -2354,7 +2550,7 @@ function addMapLayers(){
   const sym = (style.layers || []).find(l => l.type === "symbol" && l.layout && l.layout["text-font"]);
   const font = sym ? sym.layout["text-font"] : ["Noto Sans Regular"];
   // 3D-Häuser aus den Kartendaten (OpenStreetMap-Höhen), erst ab Strassen-Zoom, damit es flüssig bleibt
-  if(vec && mapTheme !== "luftbild"){
+  if(vec && !rasterTheme()){
     add({ id:"bauten", type:"fill-extrusion", source:vec, "source-layer":"building", minzoom:14,
       filter:["!=", ["get", "hide_3d"], true],
       paint:{
@@ -2365,9 +2561,14 @@ function addMapLayers(){
       } });
   }
   addMapImage("baum", treeIconUrl(), 48);
-  addMapImage("pfeil", mapTheme === "hell" ? arrowIconUrl("#5b6672", "#ffffff") : arrowIconUrl("#f2f4f6", "#1b232c"), 40);
+  addMapImage("pfeil", mapTheme === "hell" || mapTheme === "landeskarte" ? arrowIconUrl("#5b6672", "#ffffff") : arrowIconUrl("#f2f4f6", "#1b232c"), 40);
   addMapImage("pfeil-ern", arrowIconUrl("#ffffff", "#7a1414"), 40);
   if(vec) roadDirLayers(vec, "transportation").forEach(add);
+  OSM_ICONS.forEach(k => addMapImage("osm-" + k, osmIconUrl(k), 44));
+  lmap.addSource("parzellen", { type:"raster", tiles:[PARCEL_TILES], tileSize:256, minzoom:14, maxzoom:19, attribution:"© swisstopo, Kantone" });
+  add({ id:"parzellen", type:"raster", source:"parzellen", minzoom:15, layout:{ visibility:infoOn.parzellen ? "visible" : "none" }, paint:{ "raster-opacity":0.7 } });
+  lmap.addSource("osm", { type:"geojson", data:{ type:"FeatureCollection", features:osmFeat } });
+  osmLayers(font).forEach(add);
   MACH_KINDS.forEach(k => ["running", "waiting", "broken", "off"].forEach(st => addMapImage("mi-" + k + "-" + st, machIconUrl(k, st), 64)));
   const g = siteGeo();
   lmap.addSource("site-areas", { type:"geojson", data:g.areas });
@@ -2524,15 +2725,17 @@ async function initRealMap(cam){
         attribution:"Höhen © Mapzen" });
       lmap.addSource("dem-hs", { type:"raster-dem", tiles:[DEM_TILES], encoding:"terrarium", tileSize:256, maxzoom:15 });   // eigene Quelle fürs Relief (bessere Darstellung)
       const first = lmap.getStyle().layers.find(l => l.type === "symbol");
-      if(mapTheme !== "luftbild") lmap.addLayer({ id:"relief", type:"hillshade", source:"dem-hs",
+      if(!rasterTheme()) lmap.addLayer({ id:"relief", type:"hillshade", source:"dem-hs",
         paint:mapTheme === "dunkel" ? { "hillshade-exaggeration":0.6, "hillshade-shadow-color":"#05080b", "hillshade-highlight-color":"#2a3542" }
                                      : { "hillshade-exaggeration":0.35, "hillshade-shadow-color":"#6b7380", "hillshade-highlight-color":"#ffffff" } }, first ? first.id : undefined);
       styleBasemap();
       addMapLayers();
       mapReady = true;
       set3D(cam ? cam.pitch > 0 : true, !!cam);
+      applyInfos();
       lmap.on("idle", settleTerrain);
       lmap.on("moveend", settleSoon);
+      lmap.on("moveend", ()=>{ clearTimeout(osmTimer); osmTimer = setTimeout(osmLoad, 600); infosRefresh(); });
       lmap.on("sourcedata", e=>{ if(e && e.sourceId === "dem" && e.tile) settleSoon(); });   // Höhendaten neu da
       lmap.on("movestart", e=>{ if(e && e.originalEvent) flySeq++; });                       // Finger oder Maus: keine Nachfahrt
       if(!cam) showOverview(0);
@@ -3899,6 +4102,7 @@ function initMode(){
   setMode(detectMode(), false);
 }
 $("btnOverview").onclick = ()=>showOverview();
+$("btnInfos").onclick = ()=>modalInfos();
 $("addSiteBtn").onclick = ()=>modalSite();
 $("addMachineBtn").onclick = ()=>modalMachine();
 $("historyBtn").onclick = modalHistory;

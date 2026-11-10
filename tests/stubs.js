@@ -70,7 +70,9 @@
       this.queryTerrainElevation = function(){ return terrain ? (window.__terrainDiff || 0) : null; };
       this.fitBounds = function(){ window.__fits = (window.__fits || 0) + 1; };
       this.flyTo = function(o){ window.__fly = o.center.join(","); };
-      this.getZoom = function(){ return 12; };
+      this.getZoom = function(){ return window.__mapZoom || 12; };
+      this.setLayoutProperty = function(id, k, v){ if(layers[id]){ layers[id].layout = layers[id].layout || {}; layers[id].layout[k] = v; } };
+      this.getBounds = function(){ return { getWest:()=>8.820, getEast:()=>8.823, getNorth:()=>47.227, getSouth:()=>47.225 }; };
       this.remove = function(){};
     },
     NavigationControl: function(){},

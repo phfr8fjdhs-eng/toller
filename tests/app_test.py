@@ -975,6 +975,38 @@ with sync_playwright() as p:
     check("Karte: Pfeile in Fahrtrichtung auf den Strassen (Einbahn in der Mitte, sonst je Richtung rechts)", all(rd[:3]) and all(x["type"] == "symbol" and x["source-layer"] == "transportation" and x["layout"]["symbol-placement"] == "line" for x in rd[:3])
           and "oneway" in json.dumps(rd[0]["filter"]) and rd[2]["layout"]["icon-rotate"] == 180 and "icon-rotate" not in rd[1]["layout"] and z.evaluate("__mapImages.indexOf ? __mapImages.indexOf('pfeil') >= 0 : !!__mapImages.pfeil"))
     check("Erneuern: Pfeile auf dem Band zeigen die betroffene Fahrtrichtung", rd[3] and rd[3]["layout"]["icon-image"] == "pfeil-ern" and "off" in json.dumps(rd[3]["layout"]["icon-rotate"]) and "erneuern" in json.dumps(rd[3]["filter"]))
+    # Ebenen: Tabelle mit Schaltern, Zeichen aus OpenStreetMap (Overpass wird im Test ersetzt)
+    osm_calls = []
+    OSM = {"elements": [
+        {"type": "node", "id": 1, "lat": 47.2260, "lon": 8.8210, "tags": {"highway": "crossing", "crossing": "zebra"}},
+        {"type": "node", "id": 2, "lat": 47.2261, "lon": 8.8212, "tags": {"highway": "traffic_signals"}},
+        {"type": "node", "id": 3, "lat": 47.2262, "lon": 8.8214, "tags": {"highway": "bus_stop", "name": "<b>Bahnhof</b>"}},
+        {"type": "way", "id": 4, "center": {"lat": 47.2263, "lon": 8.8216}, "tags": {"highway": "residential", "maxspeed": "30"}},
+        {"type": "way", "id": 5, "center": {"lat": 47.2264, "lon": 8.8218}, "tags": {"highway": "residential", "maxspeed": "signals"}},
+        {"type": "node", "id": 6, "lat": 47.2265, "lon": 8.8220, "tags": {"man_made": "manhole"}},
+        {"type": "node", "id": 7, "lat": 47.2266, "lon": 8.8222, "tags": {"natural": "tree"}},
+        {"type": "node", "id": 1, "lat": 47.2260, "lon": 8.8210, "tags": {"highway": "crossing"}},
+        {"type": "node", "id": 8, "tags": {"highway": "stop"}}]}
+    z.route("**/overpass-api.de/**", lambda r: (osm_calls.append(r.request.post_data or ""), r.fulfill(body=json.dumps(OSM), content_type="application/json", headers={"access-control-allow-origin": "*"}))[1])
+    z.evaluate("osmLoad()"); z.wait_for_timeout(300)
+    check("Ebenen: weit weg wird nichts von OpenStreetMap geholt", len(osm_calls) == 0)
+    z.evaluate("window.__mapZoom = 17; osmLoad()"); z.wait_for_timeout(1800)
+    ks = z.evaluate("__mapData.osm.features.map(f => f.properties.k).sort().join(',')")
+    check("Ebenen: nah werden Zebrastreifen, Ampeln, Haltestellen, Tempo, Schaechte, Baeume geholt (ohne Doppelte, ohne Unbrauchbares)", ks == "ampel,baum,bus,schacht,tempo,zebra", ks)
+    check("Ebenen: jedes Feld nur einmal anfragen, gesendet wird nur der Ausschnitt", len(osm_calls) == 1 and "crossing" in osm_calls[0] and "47.2" in osm_calls[0], str(len(osm_calls)))
+    ol = json.loads(z.evaluate("JSON.stringify(['zebra','ampel','schacht','baum','parzellen'].map(k => __mapLayers[k === 'parzellen' ? k : 'osm-' + k].layout.visibility))"))
+    check("Ebenen: Standard zeigt Zebrastreifen und Ampeln, Schaechte, Baeume und Grundstuecke sind aus", ol == ["visible", "visible", "none", "none", "none"], str(ol))
+    z.click("#btnInfos"); z.wait_for_timeout(100)
+    check("Ebenen: Tabelle mit Schalter je Information und Gruppen", z.locator(".infotbl input[type=checkbox]").count() == z.evaluate("INFOS.length") and z.locator(".infotbl tr.grp").count() >= 5 and "Punkte" in z.inner_text("#infoState"))
+    z.click("#info-schacht"); z.click("#info-zebra"); z.click("#info-richtung"); z.click("#info-parzellen"); z.wait_for_timeout(100)
+    ol = json.loads(z.evaluate("JSON.stringify(['osm-schacht','osm-zebra','road-dir-hin','parzellen'].map(k => __mapLayers[k].layout.visibility))"))
+    check("Ebenen: Schalter schalten die Ebenen der Karte", ol == ["visible", "none", "none", "visible"], str(ol))
+    check("Ebenen: Auswahl bleibt im Geraet gespeichert", z.evaluate("JSON.parse(localStorage.getItem('karteInfos')).schacht === true && JSON.parse(localStorage.getItem('karteInfos')).zebra === false"))
+    z.click("#infoNone"); z.wait_for_timeout(50)
+    check("Ebenen: 'Alle aus' blendet auch Maschinen und Zeichnungen aus", z.evaluate("__mapLayers['mach-3d'].layout.visibility") == "none" and z.evaluate("__mapLayers['dr-leitung'].layout.visibility") == "none")
+    z.evaluate("INFOS.forEach(i => setInfo(i.id, i.on))")
+    check("Ebenen: Name einer Haltestelle bleibt Text (kein HTML)", z.evaluate("__mapData.osm.features.find(f => f.properties.k === 'bus').properties.t") == "<b>Bahnhof</b>" and z.locator(".infotbl b").count() == 0)
+    z.click("#modal .cardhead button"); z.evaluate("window.__mapZoom = 0")
     ly = z.evaluate("__mapLayers")
     check("Erneuern: rot-weiss gestreift (rote Linie mit weissen Streifen), nicht blinkend", ly["dr-ern-full"]["paint"]["line-color"] == "#d93a3a" and ly["dr-ern-full-w"]["paint"]["line-dasharray"] == [1, 1] and ly["dr-ern-half-w"]["paint"]["line-color"] == "#ffffff" and "broken" not in str(ly["dr-ern-full"]["paint"]))
     # Vereinfachte Kartendaten: gemeinsamer Punkt an der Kreuzung fehlt (Einmündung, Kreuzung), Brücke darf nicht verbinden
