@@ -20,6 +20,7 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 - "Werkhof" schickt eine Maschine in den Werkhof zurück, bei "Aus dem Werkhof einsetzen" holst du sie auf die gewählte Baustelle
 - Oben filterst du nach Sparte, mehrere gleichzeitig sind möglich (zum Beispiel Gartenbau und Strassenbau)
 - Live-Modus: "+ Baustelle" (mit Adresssuche oder Kartenklick), "+ Maschine", Admins verwalten "Benutzer"
+- "Foto" an einer Maschine mit offener Meldung: Foto aufnehmen oder aus der Galerie wählen. Es wird verkleinert und gehört zur Meldung, nach "Repariert", "Nachgeliefert" oder "Getankt" ist es weg. Einrichtung des Speichers: `SUPABASE-ANLEITUNG.md`
 - "Wartung" an jeder Maschine: Betriebsstunden, Service-Intervall und Termin von Hand eintragen. Ist der Service fällig, steht es als Text an der Maschine, als Chip "Service fällig" oben und als ruhiger Hinweis (kein Blinken, kein Ton). "Service erledigt" setzt den Zähler zurück
 - Fällt die Verbindung weg, steht oben ein Hinweis mit der Uhrzeit des letzten Stands. Änderungen werden dann nicht gespeichert und auf der Seite zurückgenommen
 - "Verlauf": zeigt, welche Maschine wie oft und wie lange gestört war oder auf Material oder Diesel gewartet hat. Die Datenbank schreibt mit, niemand kann es von Hand ändern

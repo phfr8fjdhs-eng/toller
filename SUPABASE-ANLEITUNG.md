@@ -66,6 +66,26 @@ Nach dem Hochladen nach GitHub aktualisiert Netlify die Seite in etwa einer Minu
 3. Du öffnest **Benutzer** und klickst bei der Person auf **Freigeben**. Sie klickt "Neu prüfen".
 4. Wer einen Admin-Knopf braucht, bekommt **Zu Admin**.
 
+## Fotos zu Meldungen einrichten
+Zu einer offenen Meldung (Defekt, Material oder Diesel fehlt) lässt sich ein Foto hinzufügen. Die Bilder liegen im privaten Speicher
+**meldungsfotos** (Supabase Storage). `schema.sql` richtet ihn beim Ausführen selbst ein: privat, nur JPEG, höchstens 1,5 MB, nur freigegebene Personen
+lesen, laden hoch und löschen. Die Seite verkleinert jedes Bild vor dem Hochladen auf höchstens 1280 Pixel und entfernt dabei Ortsdaten und
+andere Metadaten des Fotos.
+
+So prüfst du es nach dem Ausführen von `schema.sql`:
+1. In Supabase links **Storage** öffnen. Es muss ein Bucket **meldungsfotos** mit dem Hinweis "Private" da sein.
+2. Fehlt er (die Meldung "Fotos zu Meldungen konnten nicht eingerichtet werden" erscheint dann unter den Ergebnissen des SQL Editors), lege ihn von Hand an:
+   **New bucket**, Name `meldungsfotos`, **Public bucket aus**, **Restrict file size** 1.5 MB, **Allowed MIME types** `image/jpeg`.
+   Danach `schema.sql` noch einmal ausführen, das ergänzt die Zugriffsregeln.
+3. In der Seite bei einer defekten Maschine auf **Foto** tippen. Klappt es nicht, steht die Ursache in der roten Meldung.
+
+Wichtig zu wissen:
+- Ein Foto gehört nur zur offenen Meldung. Wird sie erledigt oder wechselt sie, löscht die Datenbank den Pfad und die Seite löscht die Datei. Wird die Meldung von
+  einem Gerät ohne Verbindung oder von Hand in der Datenbank erledigt, kann eine Datei übrig bleiben. Sie ist unsichtbar und harmlos, nimmt aber Platz.
+  Unter **Storage, meldungsfotos** lassen sich solche Dateien von Hand löschen (nicht per SQL löschen: dabei bleibt die eigentliche Datei bestehen).
+- Auf Fotos können zufällig Personen zu sehen sein. Mitarbeiter darüber informieren und Fotos nur von Maschinen und Schäden machen.
+- Die Anzeigeadressen der Fotos sind eine Stunde gültig und nur für angemeldete, freigegebene Personen erzeugbar.
+
 ## Alte Spalten entfernen (freiwillig)
 Frühere Versionen hatten Prozent-Spalten für Material und Tank. Die Seite braucht sie nicht mehr. Sie stören nicht und können bleiben.
 Wenn du aufräumen willst, im SQL Editor (löscht die Werte in diesen Spalten endgültig):
@@ -85,6 +105,8 @@ alter table public.machines drop column if exists tank;
 | Eigenes Material in der Auswahl ergänzen | nein | ja | ja |
 | Eigenes Material löschen | nein | nur eigenes | ja |
 | Sehen, wer eine Meldung abgeschickt hat | nein | ja | ja |
+| Foto zu einer Meldung hinzufügen, ansehen, ersetzen, entfernen | nein | ja | ja |
+| Wartung (Betriebsstunden, Service) eintragen | nein | ja | ja |
 | Verlauf der Störungen ansehen | nein | ja | ja |
 | Verlauf ändern oder löschen | nein | nein | nein (nur die Datenbank schreibt ihn) |
 | Baustellen und Maschinen löschen | nein | nein | ja |
@@ -97,6 +119,7 @@ alter table public.machines drop column if exists tank;
 - Datenschutz: Die Daten liegen in der gewählten Region bei Supabase. Kläre das intern ab, bevor echte Daten hineinkommen.
 - Passwort vergessen: Aktuell gibt es dafür noch keinen Knopf in der Seite. Ein Admin kann in Supabase unter
   **Authentication, Users** ein neues Passwort setzen.
+- Neue Funktionen (Wartung, Fotos) brauchen ein erneutes Ausführen von `schema.sql`. Bis dahin läuft die Seite weiter, zeigt aber diese Funktionen nicht oder mit einem Hinweis.
 - Excel-Anbindung ist noch nicht gebaut. Sie kommt später als eigener Schritt (siehe `CLAUDE.md`).
 
 ## Wenn etwas nicht klappt

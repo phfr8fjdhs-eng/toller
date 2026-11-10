@@ -12,7 +12,7 @@ su postgres -c "$BIN/initdb -D $D/data -A trust >/dev/null"
 su postgres -c "$BIN/pg_ctl -D $D/data -o '-p 5544 -k $D' -l $D/log -w start >/dev/null"
 P="psql -h $D -p 5544 -U postgres -v ON_ERROR_STOP=1 -q -X"
 $P -d postgres -c "create role anon nologin" -c "create role authenticated nologin"
-setup_db () { # $1 = Datenbankname: Supabase-Rahmen nachbauen
+setup_db () { # $1 = Datenbankname, $2 = "ohne-storage": Supabase-Rahmen nachbauen (mit nachgebautem Storage, ausser bei "ohne-storage")
   $P -d postgres -c "create database $1"
   psql -h $D -p 5544 -U postgres -v ON_ERROR_STOP=1 -q -X -d "$1" <<'SQL'
 create schema auth;
@@ -24,6 +24,17 @@ alter default privileges in schema public grant all on tables to anon, authentic
 alter default privileges in schema public grant all on sequences to anon, authenticated;
 alter default privileges in schema public grant execute on functions to anon, authenticated;
 SQL
+  if [ "$2" != "ohne-storage" ]; then
+    psql -h $D -p 5544 -U postgres -v ON_ERROR_STOP=1 -q -X -d "$1" <<'SQL'
+create schema storage;
+create table storage.buckets (id text primary key, name text, public boolean default false, file_size_limit bigint, allowed_mime_types text[]);
+create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text references storage.buckets(id), name text, owner uuid default auth.uid());
+alter table storage.objects enable row level security;
+grant usage on schema storage to anon, authenticated;
+grant all on storage.objects to anon, authenticated;
+grant select on storage.buckets to authenticated;
+SQL
+  fi
 }
 setup_db t
 P="$P -d t"
@@ -383,6 +394,56 @@ out=$(as_anon "update public.machines set stunden=5 where id='$W';")
 expect "Wartung: ohne Anmeldung kein Zugriff" "permission denied" "$out"
 as_user $U3 "update public.machines set status='running', reason='' where id='$W';" >/dev/null
 
+# ---------------------------------------------------------------- Fotos zu Meldungen
+echo
+echo "=== Fotos zu Meldungen (foto_pfad und Speicher meldungsfotos) ==="
+F1="$W/1731240000.jpg"
+fcol () { $P -c "select coalesce(foto_pfad,'leer') from public.machines where id='$W'"; }
+as_user $U3 "update public.machines set foto_pfad='$F1' where id='$W';" >/dev/null
+expect_eq "Foto: ohne offene Meldung (Maschine läuft) wird kein Foto gespeichert" "leer" "$(fcol)"
+as_user $U3 "update public.machines set status='broken', reason='' where id='$W';" >/dev/null
+as_user $U3 "update public.machines set foto_pfad='$F1' where id='$W';" >/dev/null
+expect_eq "Foto: zu einer offenen Meldung (Defekt) wird es gespeichert" "$F1" "$(fcol)"
+as_user $U3 "update public.machines set stunden=7 where id='$W';" >/dev/null
+expect_eq "Foto: andere Änderungen (Wartung) lassen es stehen" "$F1" "$(fcol)"
+as_user $U3 "update public.machines set site_id=site_id where id='$W';" >/dev/null
+expect_eq "Foto: auch ohne neue Meldung bleibt es" "$F1" "$(fcol)"
+as_user $U3 "update public.machines set status='waiting', reason='Diesel fehlt' where id='$W';" >/dev/null
+expect_eq "Foto: wechselt die Meldung (Defekt -> Diesel fehlt), gehört das Foto nicht mehr dazu" "leer" "$(fcol)"
+as_user $U3 "update public.machines set foto_pfad='$F1' where id='$W';" >/dev/null
+as_user $U3 "update public.machines set status='running', reason='', foto_pfad='$F1' where id='$W';" >/dev/null
+expect_eq "Foto: Meldung erledigt -> Foto weg, auch wenn die Seite es noch mitschickt" "leer" "$(fcol)"
+as_user $U3 "update public.machines set status='broken', reason='', foto_pfad='$F1' where id='$W';" >/dev/null
+expect_eq "Foto: neue Meldung mit gleichzeitig mitgeschicktem Foto: das Foto wird nicht übernommen" "leer" "$(fcol)"
+out=$(as_user $U3 "update public.machines set foto_pfad='../evil.sh' where id='$W';")
+expect "Foto: ungültiger Pfad wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "update public.machines set foto_pfad='$W/17312400.jpg' where id='$W';")
+expect "Foto: zu kurzer Zeitstempel wird abgelehnt" "violates check constraint" "$out"
+out=$(as_user $U3 "insert into public.machines(name,sparte,status,foto_pfad) values ('Mit Foto','tief','broken','$F1') returning coalesce(foto_pfad,'leer');")
+expect "Foto: neue Maschine kann kein Foto mitbringen" "leer" "$out"
+as_user $U3 "update public.machines set status='running', reason='' where id='$W';" >/dev/null
+
+echo "--- Speicher meldungsfotos"
+expect_eq "Speicher: Bucket ist privat, höchstens 1,5 MB, nur JPEG" "false|1572864|image/jpeg" "$($P -c "select public::text||'|'||file_size_limit||'|'||array_to_string(allowed_mime_types, ',') from storage.buckets where id='meldungsfotos'")"
+expect_eq "Speicher: Bucket-Einrichtung ist wiederholbar (nur einer)" "1" "$($P -c "select count(*) from storage.buckets")"
+out=$(as_user $U3 "insert into storage.objects(bucket_id,name) values ('meldungsfotos','$F1') returning name;")
+expect "Speicher: freigegebene Person lädt ein Foto mit gültigem Pfad hoch" "$F1" "$out"
+out=$(as_user $U3 "insert into storage.objects(bucket_id,name) values ('meldungsfotos','boese.sh') returning name;")
+expect "Speicher: ungültiger Dateiname wird abgelehnt" "row-level security" "$out"
+out=$(as_user $U3 "insert into storage.objects(bucket_id,name) values ('meldungsfotos','$W/abc.jpg') returning name;")
+expect "Speicher: Pfad ohne Zeitstempel wird abgelehnt" "row-level security" "$out"
+$P -c "insert into storage.buckets(id,name) values ('anderer','anderer')"
+out=$(as_user $U3 "insert into storage.objects(bucket_id,name) values ('anderer','$F1') returning name;")
+expect "Speicher: andere Buckets bleiben unberührt (keine Regel dafür)" "row-level security" "$out"
+out=$(as_user $U2 "insert into storage.objects(bucket_id,name) values ('meldungsfotos','$W/1731240001.jpg') returning name;")
+expect "Speicher: nicht freigegebene Person darf nichts hochladen" "row-level security" "$out"
+expect_eq "Speicher: freigegebene Person sieht das Foto" "1" "$(as_user $U3 "select count(*) from storage.objects where bucket_id='meldungsfotos';" | tail -1)"
+expect_eq "Speicher: nicht freigegebene Person sieht keine Fotos" "0" "$(as_user $U2 "select count(*) from storage.objects where bucket_id='meldungsfotos';" | tail -1)"
+out=$(as_anon "select count(*) from storage.objects;")
+expect_not "Speicher: ohne Anmeldung sieht niemand etwas" "1" "$(echo "$out" | tail -1)"
+expect_eq "Speicher: nicht freigegebene Person kann nichts löschen" "0" "$(as_user $U2 "with d as (delete from storage.objects where bucket_id='meldungsfotos' returning 1) select count(*) from d;" | tail -1)"
+expect_eq "Speicher: freigegebene Person löscht das Foto" "1" "$(as_user $U3 "with d as (delete from storage.objects where bucket_id='meldungsfotos' returning 1) select count(*) from d;" | tail -1)"
+
 # ---------------------------------------------------------------- Update einer bestehenden (alten) Datenbank
 echo
 echo "=== Update einer alten Datenbank (mit Prozent-Spalten) ==="
@@ -401,6 +462,7 @@ expect_eq "Update: Tabelle downtimes ist da, offene Einträge stimmen mit den ge
 expect_eq "Update: Spalten für den Absender sind an machines ergänzt" "3" "$($PA -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('reported_by','reported_name','reported_at')")"
 expect_eq "Update: Spalte weitere_sparten ist an sites ergänzt, alte Baustellen haben keine weiteren Sparten" "1 true" "$($PA -c "select (select count(*) from information_schema.columns where table_schema='public' and table_name='sites' and column_name='weitere_sparten')||' '||(select bool_and(weitere_sparten = '{}') from public.sites)")"
 expect_eq "Update: Wartungs-Spalten sind an machines ergänzt, alte Maschinen haben 0 Stunden und kein Intervall" "4 true" "$($PA -c "select (select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name in ('stunden','service_stunden','service_intervall','service_termin'))||' '||(select bool_and(stunden=0 and service_intervall is null and service_termin is null) from public.machines)")"
+expect_eq "Update: Spalte foto_pfad und Speicher meldungsfotos sind da" "1 1" "$($PA -c "select (select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name='foto_pfad')||' '||(select count(*) from storage.buckets where id='meldungsfotos')")"
 expect_eq "Update: alte Daten sind unverändert" "5 Baustellen, 13 Maschinen" "$($PA -c "select (select count(*) from sites)||' Baustellen, '||(select count(*) from machines)||' Maschinen'")"
 out=$($PA -c "insert into public.sites(name,sparte,lat,lng) values ('Ohne Prozent','tief',47.2,8.8) returning name;" 2>&1)
 expect "Update: Baustelle ohne Material-Spalten anlegen geht weiter" "Ohne Prozent" "$out"
@@ -416,6 +478,15 @@ out=$($PA -c "insert into public.machines(name,sparte,status) values ('Nach dem 
 expect "Aufräumen: Maschine anlegen geht danach weiter" "Nach dem Aufräumen" "$out"
 out=$($PA -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 | grep -i "error" || true)
 expect_not "Aufräumen: schema.sql läuft danach weiterhin ohne Fehler" "ERROR" "$out"
+
+echo
+echo "=== Datenbank ohne Supabase Storage ==="
+setup_db t_ns ohne-storage
+PN="psql -h $D -p 5544 -U postgres -d t_ns -At -X -q"
+out=$($PN -v ON_ERROR_STOP=1 -f "$ROOT/supabase/schema.sql" 2>&1 || true)
+expect_not "Ohne Storage: schema.sql läuft ohne Fehler durch" "ERROR" "$out"
+expect "Ohne Storage: ein Hinweis sagt, dass Fotos ihn brauchen" "Supabase Storage ist hier nicht vorhanden" "$out"
+expect_eq "Ohne Storage: Spalte foto_pfad ist trotzdem da, alles andere läuft" "1" "$($PN -c "select count(*) from information_schema.columns where table_schema='public' and table_name='machines' and column_name='foto_pfad'")"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "Bedarf- und Update-Tests: alle bestanden"; else echo "Bedarf- und Update-Tests: $FAILS FEHLER"; exit 1; fi

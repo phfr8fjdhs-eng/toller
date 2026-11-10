@@ -102,7 +102,7 @@
   window.__mapSites = function(){ const d = window.__mapData && window.__mapData["site-pts"]; return d ? d.features.map(f => f.properties) : []; };
 
   // ---- Supabase
-  const db = window.__db = { sites:[], machines:[], needs:[], materials:[], activity:[], downtimes:[], drawings:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };
+  const db = window.__db = { storage:{ files:{} }, storageFail:null, afterUpload:null, sites:[], machines:[], needs:[], materials:[], activity:[], downtimes:[], drawings:[], profiles:[], users:{}, session:null, handlers:[], authCbs:[], seq:1, autoConfirm:true, failNext:null, resets:[], failReset:null };
   const nid = () => "id" + (db.seq++);
   const me = () => db.session ? db.profiles.find(p => p.id === db.session.user.id) : null;
   const approved = () => { const m = me(); return !!(m && m.approved); };
@@ -115,7 +115,9 @@
 
   // Wie der Trigger machines_stamp: Absender und Zeit setzt die Datenbank, nie die Seite
   function stamp(r, old){
-    if(old && r.status === old.status && r.reason === old.reason){ r.reported_by = old.reported_by; r.reported_name = old.reported_name; r.reported_at = old.reported_at; return; }
+    if(old && r.status === old.status && r.reason === old.reason){ r.reported_by = old.reported_by; r.reported_name = old.reported_name; r.reported_at = old.reported_at;
+      if(r.status !== "waiting" && r.status !== "broken") r.foto_pfad = null; return; }
+    r.foto_pfad = null;                                  // neue oder erledigte Meldung: das Foto gehoert nicht mehr dazu (wie der Trigger machines_stamp)
     if(r.status === "waiting" || r.status === "broken"){ r.reported_by = (me() || {}).id; r.reported_name = (me() || {}).name || ""; r.reported_at = new Date().toISOString(); }
     else { r.reported_by = null; r.reported_name = ""; r.reported_at = null; }
   }
@@ -164,6 +166,13 @@
         if(this.op === "select" && /stunden/.test(this.cols || "")) return colErr;
         if((this.op === "insert" || this.op === "update") && this.row && ("stunden" in this.row || "service_stunden" in this.row)) return colErr;
       }
+      if(db.noFotoCol && this.t === "machines"){
+        const colErr = { data:null, error:{ code:"42703", message:"column machines.foto_pfad does not exist" } };
+        if(this.op === "select" && /foto_pfad/.test(this.cols || "")) return colErr;
+        if((this.op === "insert" || this.op === "update") && this.row && "foto_pfad" in this.row) return colErr;
+      }
+      if(this.t === "machines" && (this.op === "update" || this.op === "insert") && this.row && this.row.foto_pfad && !/^[0-9a-f-]{36}\/[0-9]{10,16}\.jpg$/.test(this.row.foto_pfad))
+        return { data:null, error:{ message:"new row for relation \"machines\" violates check constraint \"machines_foto_check\"" } };
       const T = db[this.t];
       if(!T) return { data:null, error:{ code:"42P01", message:"relation \"public." + this.t + "\" does not exist" } };   // Tabelle fehlt (altes schema.sql)
       const isProf = this.t === "profiles";
@@ -255,6 +264,25 @@
             if(u.password === o.password) return { data:null, error:{ message:"New password should be different from the old password." } };
             u.password = o.password; db.passwordChanges = (db.passwordChanges || 0) + 1;
             return { data:{ user:{ id:u.id } }, error:null };
+          }
+        },
+        storage:{
+          from(bucket){
+            return {
+              async upload(path, blob, o){
+                if(db.storageFail){ const e = db.storageFail; db.storageFail = null; return { data:null, error:{ message:e } }; }
+                if(!approved() || bucket !== "meldungsfotos" || !/^[0-9a-f-]{36}\/[0-9]{10,16}\.jpg$/.test(path)) return { data:null, error:{ message:"new row violates row-level security policy" } };
+                if(blob.size > 1572864 || blob.type !== "image/jpeg") return { data:null, error:{ message:"The object exceeded the maximum allowed size or type" } };
+                db.storage.files[path] = blob;
+                if(db.afterUpload){ const f = db.afterUpload; db.afterUpload = null; f(path); }
+                return { data:{ path }, error:null };
+              },
+              async createSignedUrl(path){
+                if(!approved() || !db.storage.files[path]) return { data:null, error:{ message:"Object not found" } };
+                return { data:{ signedUrl:"https://x.supabase.co/storage/v1/object/sign/meldungsfotos/" + path + "?token=t" }, error:null };
+              },
+              async remove(paths){ (paths || []).forEach(x => { delete db.storage.files[x]; }); (db.storage.removed = db.storage.removed || []).push.apply(db.storage.removed, paths || []); return { data:[], error:null }; }
+            };
           }
         },
         from(t){ return new Q(t); },

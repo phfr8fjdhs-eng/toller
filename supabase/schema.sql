@@ -70,6 +70,11 @@ alter table public.machines add column if not exists stunden           integer n
 alter table public.machines add column if not exists service_stunden   integer not null default 0;
 alter table public.machines add column if not exists service_intervall integer;
 alter table public.machines add column if not exists service_termin    date;
+-- Foto zur offenen Meldung (Defekt oder wartet): Pfad der Datei im privaten Speicher "meldungsfotos" (Supabase Storage), nie die Datei selbst.
+-- Der Trigger machines_stamp löscht den Pfad, sobald die Meldung wechselt oder erledigt ist.
+alter table public.machines add column if not exists foto_pfad text;
+alter table public.machines drop constraint if exists machines_foto_check;
+alter table public.machines add constraint machines_foto_check check (foto_pfad is null or foto_pfad ~ '^[0-9a-f-]{36}/[0-9]{10,16}\.jpg$');
 alter table public.machines drop constraint if exists machines_wartung_check;
 alter table public.machines add constraint machines_wartung_check check (
   stunden between 0 and 999999 and service_stunden between 0 and 999999
@@ -327,9 +332,11 @@ begin
     changed := new.status is distinct from old.status or new.reason is distinct from old.reason;
     if not changed then
       new.reported_by := old.reported_by; new.reported_name := old.reported_name; new.reported_at := old.reported_at;
+      if new.status not in ('waiting', 'broken') then new.foto_pfad := null; end if;      -- ein Foto gehört nur zu einer offenen Meldung
       return new;
     end if;
   end if;
+  new.foto_pfad := null;                                                                  -- neue oder erledigte Meldung: altes Foto gehört nicht mehr dazu
   if new.status in ('waiting', 'broken') then
     select coalesce(nullif(trim(name), ''), email, '') into who from public.profiles where id = auth.uid();
     new.reported_by := auth.uid();
@@ -610,4 +617,30 @@ begin
     exception when duplicate_object then null;
     end;
   end if;
+end $$;
+
+-- ---------------------------------------------------------------- Fotos zu Meldungen (Supabase Storage)
+-- Privater Speicher "meldungsfotos": nur freigegebene Personen lesen, laden hoch und löschen. Nur JPEG, höchstens 1,5 MB
+-- (die Seite verkleinert das Bild vorher und entfernt dabei Ortsdaten und andere Metadaten). Pfad: <Maschinen-Id>/<Zeitstempel>.jpg.
+-- Steht ganz am Ende und fängt Fehler ab: Klappt das Einrichten nicht, läuft alles andere weiter und die Seite sagt es beim Hochladen.
+do $$
+begin
+  if to_regclass('storage.objects') is null then
+    raise notice 'Supabase Storage ist hier nicht vorhanden: Fotos zu Meldungen brauchen ihn (siehe SUPABASE-ANLEITUNG.md)';
+    return;
+  end if;
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('meldungsfotos', 'meldungsfotos', false, 1572864, array['image/jpeg'])
+  on conflict (id) do update set public = false, file_size_limit = 1572864, allowed_mime_types = array['image/jpeg'];
+  execute 'drop policy if exists meldungsfotos_select on storage.objects';
+  execute $p$create policy meldungsfotos_select on storage.objects for select to authenticated
+    using (bucket_id = 'meldungsfotos' and public.is_approved())$p$;
+  execute 'drop policy if exists meldungsfotos_insert on storage.objects';
+  execute $p$create policy meldungsfotos_insert on storage.objects for insert to authenticated
+    with check (bucket_id = 'meldungsfotos' and public.is_approved() and name ~ '^[0-9a-f-]{36}/[0-9]{10,16}\.jpg$')$p$;
+  execute 'drop policy if exists meldungsfotos_delete on storage.objects';
+  execute $p$create policy meldungsfotos_delete on storage.objects for delete to authenticated
+    using (bucket_id = 'meldungsfotos' and public.is_approved())$p$;
+exception when others then
+  raise notice 'Fotos zu Meldungen konnten nicht eingerichtet werden: %', sqlerrm;
 end $$;

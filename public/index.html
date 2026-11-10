@@ -41,6 +41,9 @@
   #demoNote{background:#2a2410;color:#e8d28a;padding:8px 16px;font-size:13px;border-bottom:1px solid #4a3f17}
   #svcBanner{display:none;background:#2b2147;color:#e9ddff;border-bottom:2px solid var(--svc);padding:8px 16px;font-weight:600;font-size:14px}
   #svcBanner.show{display:block}
+  .fthumb{padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;line-height:0;background:#0b0f14}
+  .fthumb img{width:64px;height:48px;object-fit:cover;display:block}
+  .fbig{max-width:100%;max-height:60vh;border-radius:8px;display:block;margin:0 auto;background:#0b0f14}
   .svc{font-size:12px;color:#d2bbff}
   .svc.due{font-weight:600}
   .svctag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#1b1233;background:var(--svc)}
@@ -591,13 +594,17 @@ async function dbMachine(m, patch, prev, counted){
   if(r.error){
     if(prev){ Object.assign(m, prev); if(counted && incidents > 0) incidents--; render(); }   // nicht gespeichert: nie einen Stand zeigen, den es nicht gibt
     toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll();
+    return;
   }
+  if(prev && prev.foto && (m.status !== prev.status || m.reason !== prev.reason)) removeFotoFile(prev.foto);   // Meldung erledigt oder gewechselt: Datei im Speicher löschen
 }
 
 // Wer hat gemeldet und wann: in Live setzt die Datenbank das selbst (Trigger machines_stamp).
 // Hier nur die sofortige Anzeige auf diesem Gerät, bis die Antwort der Datenbank kommt.
 function stampLocal(m, before){
   if(m.status === before.status && m.reason === before.reason) return;
+  if(m.fotoUrl){ try{ URL.revokeObjectURL(m.fotoUrl); }catch(e){} m.fotoUrl = null; }
+  m.foto = null;                                  // ein Foto gehört zu einer Meldung: wechselt oder endet sie, ist es weg (die Datenbank macht dasselbe)
   if(m.status === "waiting" || m.status === "broken"){ m.by = LIVE ? (me ? me.name : "") : "Demo"; m.at = new Date().toISOString(); }
   else { m.by = ""; m.at = null; }
 }
@@ -614,7 +621,7 @@ function reportedBy(m){
 
 function setMachine(m, patch, logText){
   const old = m.status, before = { status:m.status, reason:m.reason };
-  const prev = { status:m.status, reason:m.reason, site:m.site, by:m.by, at:m.at };
+  const prev = { status:m.status, reason:m.reason, site:m.site, by:m.by, at:m.at, foto:m.foto || null };
   Object.assign(m, patch);
   stampLocal(m, before);
   trackDemo(m, before);
@@ -776,6 +783,128 @@ function modalService(m){
   openModal("Wartung: " + m.name, body);
 }
 
+/* =============================================================== Fotos zu Meldungen
+   Ein Foto gehört zur offenen Meldung (Defekt oder wartet) einer Maschine. Die Seite verkleinert es (höchstens 1280 Pixel, JPEG), dabei
+   gehen Ortsdaten und andere Metadaten verloren, und lädt es in den privaten Speicher "meldungsfotos". In der Datenbank steht nur der Pfad
+   (machines.foto_pfad). Wechselt oder endet die Meldung, löscht die Datenbank den Pfad und die Seite die Datei. Demo: nur im Arbeitsspeicher. */
+const FOTO_BUCKET = "meldungsfotos", FOTO_SIDE = 1280, FOTO_MAX_BYTES = 1400000, FOTO_IN_MAX = 40 * 1024 * 1024;
+const fotoUrls = new Map();                      // Pfad -> { url, exp } (signierte Adresse, 1 Stunde gültig)
+const hasReport = m => m.status === "waiting" || m.status === "broken";
+
+function loadImage(file){
+  return new Promise((resolve, reject)=>{
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error("Dieses Bild konnte nicht gelesen werden.")); };
+    img.src = url;
+  });
+}
+async function shrinkPhoto(file){
+  if(!file || !/^image\//.test(file.type || "")) throw new Error("Das ist kein Bild.");
+  if(file.size > FOTO_IN_MAX) throw new Error("Das Bild ist zu gross (höchstens 40 MB).");
+  const img = await loadImage(file);
+  let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  if(!w || !h) throw new Error("Dieses Bild konnte nicht gelesen werden.");
+  let scale = Math.min(1, FOTO_SIDE / Math.max(w, h));
+  for(const q of [0.72, 0.6, 0.5, 0.45]){
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w * scale)); c.height = Math.max(1, Math.round(h * scale));
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise(res => c.toBlob(res, "image/jpeg", q));
+    c.width = c.height = 1;
+    if(blob && blob.size <= FOTO_MAX_BYTES) return blob;
+    scale *= 0.8;
+  }
+  throw new Error("Das Bild bleibt zu gross. Bitte ein kleineres Bild wählen.");
+}
+
+async function fotoUrl(m){                       // Adresse zum Anzeigen oder null
+  if(!m.foto) return null;
+  if(!LIVE) return m.fotoUrl || null;
+  const c = fotoUrls.get(m.foto);
+  if(c && c.exp > Date.now()) return c.url;
+  const r = await sb.storage.from(FOTO_BUCKET).createSignedUrl(m.foto, 3600);
+  if(r.error || !r.data || !/^https:\/\//.test(r.data.signedUrl || "")) return null;
+  fotoUrls.set(m.foto, { url:r.data.signedUrl, exp:Date.now() + 50 * 60000 });
+  return r.data.signedUrl;
+}
+function removeFotoFile(path){                   // best effort: bleibt eine Datei übrig, stört sie nicht (siehe SUPABASE-ANLEITUNG.md)
+  fotoUrls.delete(path);
+  if(LIVE && sb && path) sb.storage.from(FOTO_BUCKET).remove([path]).then(()=>{}, ()=>{});
+}
+
+async function addFoto(m, file){
+  let blob;
+  try{ blob = await shrinkPhoto(file); }catch(e){ toast(e.message || "Das Bild konnte nicht verarbeitet werden.", true); return false; }
+  if(!hasReport(m)){ toast("Die Meldung ist inzwischen erledigt. Ein Foto gehört nur zu einer offenen Meldung.", true); return false; }
+  if(!LIVE){
+    if(m.fotoUrl){ try{ URL.revokeObjectURL(m.fotoUrl); }catch(e){} }
+    m.fotoUrl = URL.createObjectURL(blob); m.foto = "demo";
+    addLog("Foto zur Meldung: " + m.name + where(m)); render();
+    return true;
+  }
+  if(!fotoOk){ toast("Fotos brauchen ein Datenbank-Update (schema.sql erneut ausführen).", true); return false; }
+  const path = m.id + "/" + Date.now() + ".jpg", old = m.foto;
+  const up = await sb.storage.from(FOTO_BUCKET).upload(path, blob, { contentType:"image/jpeg", upsert:false });
+  if(up.error){ toast("Foto konnte nicht gespeichert werden: " + up.error.message + " (Speicher \"meldungsfotos\" eingerichtet? Siehe SUPABASE-ANLEITUNG.md)", true); return false; }
+  const r = await sb.from("machines").update({ foto_pfad:path }).eq("id", m.id).select().single();
+  if(r.error || !r.data || r.data.foto_pfad !== path){
+    removeFotoFile(path);
+    toast(r.error ? "Foto konnte nicht gespeichert werden: " + r.error.message : "Die Meldung ist inzwischen erledigt. Das Foto wurde nicht gespeichert.", true);
+    return false;
+  }
+  upsertMachine(mapMachine(r.data));
+  if(old && old !== path) removeFotoFile(old);
+  addLog("Foto zur Meldung: " + m.name + where(m)); render();
+  return true;
+}
+
+async function removeFoto(m){
+  const old = m.foto;
+  if(!old) return true;
+  if(!LIVE){ if(m.fotoUrl){ try{ URL.revokeObjectURL(m.fotoUrl); }catch(e){} } m.fotoUrl = null; m.foto = null; addLog("Foto entfernt: " + m.name + where(m)); render(); return true; }
+  const r = await sb.from("machines").update({ foto_pfad:null }).eq("id", m.id).select().single();
+  if(r.error){ toast("Foto konnte nicht entfernt werden: " + r.error.message, true); return false; }
+  upsertMachine(mapMachine(r.data)); removeFotoFile(old);
+  addLog("Foto entfernt: " + m.name + where(m)); render();
+  return true;
+}
+
+// Ein einziges verstecktes Dateifeld für alle Maschinen. Ohne "capture": am Handy zur Wahl Kamera oder Galerie.
+let fotoTarget = null;
+function pickFoto(m){
+  let inp = $("fotoPick");
+  if(!inp){
+    inp = el("input"); inp.type = "file"; inp.accept = "image/*"; inp.id = "fotoPick"; inp.hidden = true; inp.setAttribute("aria-label", "Foto wählen");
+    inp.addEventListener("change", async ()=>{
+      const f = inp.files && inp.files[0], t = fotoTarget;
+      inp.value = "";
+      if(f && t){ const ok = await addFoto(t, f); if(ok && $("fotoModal")) closeModal(); }
+    });
+    document.body.appendChild(inp);
+  }
+  fotoTarget = m;
+  inp.click();
+}
+
+function modalFoto(m){
+  const body = el("div", "form"); body.id = "fotoModal";
+  const img = el("img", "fbig"); img.alt = "Foto zur Meldung: " + m.name;
+  body.appendChild(img);
+  const note = el("div", "muted", "Wird geladen …"); body.appendChild(note);
+  fotoUrl(m).then(url=>{
+    if(!img.isConnected) return;
+    if(url){ img.src = url; note.textContent = [m.name, hasReport(m) ? (m.status === "broken" ? "Defekt" : m.reason) : "", reportedBy(m)].filter(Boolean).join(" · "); }
+    else note.textContent = "Das Foto konnte nicht geladen werden.";
+  }, ()=>{ if(note.isConnected) note.textContent = "Das Foto konnte nicht geladen werden."; });
+  const row = el("div", "acts"); row.style.justifyContent = "flex-start";
+  const rep = el("button", "", "Foto ersetzen"); rep.type = "button"; rep.id = "fotoReplace"; rep.onclick = ()=>pickFoto(m);
+  row.appendChild(rep);
+  row.appendChild(confirmBtn("Foto entfernen", "f:" + m.id, async ()=>{ if(await removeFoto(m)) closeModal(); }));
+  body.appendChild(row);
+  openModal("Foto: " + m.name, body, true);
+}
+
 /* =============================================================== Daten: Anlegen und Löschen */
 const mapSite = r => ({ id:r.id, name:r.name, sparte:r.sparte, lat:r.lat, lng:r.lng,
   extra:(Array.isArray(r.weitere_sparten) ? r.weitere_sparten : []).filter(k => SPARTEN[k] && k !== r.sparte) });
@@ -787,7 +916,9 @@ const spartenText = s => spartenOf(s).map(k => SPARTEN[k]).join(" + ");
 const showSite = s => spartenOf(s).some(showSparte);
 let spartenOk = true;  // false, wenn die Datenbank die Spalte weitere_sparten noch nicht hat (schema.sql erneut ausführen)
 const mapMachine = r => ({ id:r.id, name:r.name, typ:r.typ || "", sparte:r.sparte, site:r.site_id, status:r.status, reason:r.reason || "", by:r.reported_name || "", at:r.reported_at || null,
-  h:Number(r.stunden) || 0, hs:Number(r.service_stunden) || 0, iv:r.service_intervall ? Number(r.service_intervall) : null, due:r.service_termin || null });
+  h:Number(r.stunden) || 0, hs:Number(r.service_stunden) || 0, iv:r.service_intervall ? Number(r.service_intervall) : null, due:r.service_termin || null,
+  foto:r.foto_pfad || null });
+let fotoOk = true;    // false, wenn die Datenbank die Spalte foto_pfad noch nicht hat (schema.sql erneut ausführen)
 let wartungOk = true;  // false, wenn die Datenbank die Wartungs-Spalten noch nicht hat (schema.sql erneut ausführen)
 
 const mapNeed = r => ({ id:r.id, site:r.site_id, text:r.text, author:r.author || "", createdBy:r.created_by, createdAt:r.created_at, done:!!r.done, doneBy:r.done_by || "" });
@@ -942,6 +1073,8 @@ async function createMachine(v){
 
 async function deleteMachine(m){
   machines = machines.filter(x => x.id !== m.id);
+  if(m.fotoUrl){ try{ URL.revokeObjectURL(m.fotoUrl); }catch(e){} }
+  if(LIVE && m.foto) removeFotoFile(m.foto);
   if(!LIVE) demoDowntimes.forEach(d => { if(d.machineId === m.id){ if(!d.end) d.end = Date.now(); d.machineId = null; } });
   addLog(m.name + " gelöscht"); render();
   if(LIVE){
@@ -952,7 +1085,10 @@ async function deleteMachine(m){
 
 async function deleteSite(s){
   // Maschinen der Baustelle zuerst in den Werkhof, damit keine Maschine ohne Ort "läuft"
-  machines.filter(m => m.site === s.id).forEach(m => { m.site = null; m.status = "off"; m.reason = ""; });
+  machines.filter(m => m.site === s.id).forEach(m => { m.site = null; m.status = "off"; m.reason = "";
+    if(m.fotoUrl){ try{ URL.revokeObjectURL(m.fotoUrl); }catch(e){} m.fotoUrl = null; }
+    if(LIVE && m.foto) removeFotoFile(m.foto);
+    m.foto = null; });
   sites = sites.filter(x => x.id !== s.id);
   needs = needs.filter(n => n.site !== s.id);
   drawings = drawings.filter(d => d.site !== s.id);       // die Datenbank löscht sie mit (on delete cascade)
@@ -1456,6 +1592,18 @@ function renderDetail(){
       add(m.reason.indexOf("Material") === 0 ? "Nachgeliefert" : "Getankt", ()=>resolve(m));
     }
     if(m.site) add("Werkhof", ()=>toDepot(m));
+    if(hasReport(m) && (fotoOk || !LIVE)){
+      if(m.foto){
+        const tb = el("button", "fthumb"); tb.type = "button"; tb.setAttribute("data-foto", String(m.id)); tb.title = "Foto zur Meldung ansehen";
+        const im = el("img"); im.alt = "Foto zur Meldung: " + m.name; im.loading = "lazy"; tb.appendChild(im);
+        fotoUrl(m).then(u=>{ if(u && im.isConnected) im.src = u; }, ()=>{});
+        tb.onclick = ()=>modalFoto(m);
+        acts.appendChild(tb);
+      } else {
+        const fb = el("button", "", "Foto"); fb.type = "button"; fb.setAttribute("data-fotoadd", String(m.id)); fb.title = "Foto zur Meldung hinzufügen (Kamera oder Galerie)";
+        fb.onclick = ()=>pickFoto(m); acts.appendChild(fb);
+      }
+    }
     if(wartungOk || !LIVE){ const wb = el("button", "", "Wartung"); wb.type = "button"; wb.setAttribute("data-wartung", String(m.id)); wb.onclick = ()=>modalService(m); acts.appendChild(wb); }
     if(isAdmin()) acts.appendChild(confirmBtn("Löschen", "m:" + m.id, ()=>deleteMachine(m)));
     r.appendChild(acts);
@@ -4182,7 +4330,8 @@ async function loadAll(){
     sb.from("sites").select("weitere_sparten").limit(1),
     sb.from("drawings").select("*").order("created_at").limit(5000),
     sb.from("drawings").select("seite").limit(1),
-    sb.from("machines").select("stunden").limit(1)
+    sb.from("machines").select("stunden").limit(1),
+    sb.from("machines").select("foto_pfad").limit(1)
   ]);
   const err = res[0].error || res[1].error || res[2].error;
   if(err){ toast("Laden fehlgeschlagen: " + err.message, true); return; }
@@ -4192,6 +4341,7 @@ async function loadAll(){
   needsOk = !res[3].error;
   needs = needsOk ? res[3].data.map(mapNeed) : [];
   spartenOk = !res[5].error;
+  fotoOk = !res[9].error;
   wartungOk = !res[8].error;                                           // ohne die Spalten läuft alles, nur ohne Wartung
   drawingsOk = !res[6].error;
   seiteOk = drawingsOk && !res[7].error;                              // ohne Tabelle drawings: Liste mit Hinweis, alles andere läuft

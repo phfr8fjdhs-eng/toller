@@ -782,6 +782,120 @@ with sync_playwright() as p:
     check("Export Live: Fehler der Datenbank wird gemeldet, kein Absturz", "Export fehlgeschlagen" in el_.inner_text("#toast") and el_.locator("#modal").count() == 1)
     el_.click("#modal >> text=Schliessen")
 
+    # ============================================================ FOTOS ZU MELDUNGEN
+    print("=== FOTOS ===")
+    import tempfile, random
+    from PIL import Image
+    TMP = tempfile.mkdtemp()
+    def make_img(name, w, h, fmt="PNG"):
+        random.seed(5)
+        im = Image.new("RGB", (w, h))
+        px = im.load()
+        for x in range(0, w, 4):
+            for y in range(0, h, 4):
+                c = (x * 255 // w, y * 255 // h, random.randint(0, 255))
+                for dx in range(4):
+                    for dy in range(4):
+                        if x + dx < w and y + dy < h: px[x + dx, y + dy] = c
+        path = os.path.join(TMP, name); im.save(path, fmt); return path
+    IMG_A = make_img("a.png", 3000, 2000)
+    IMG_B = make_img("b.jpg", 900, 600, "JPEG")
+    TXT = os.path.join(TMP, "x.txt"); open(TXT, "w").write("kein Bild")
+    PNG1 = open(IMG_B, "rb").read()
+    MA, MB = "aaaaaaaa-0000-4000-8000-000000000001", "aaaaaaaa-0000-4000-8000-000000000002"
+    FSEED = """(()=>{
+      const d = window.__db;
+      d.users['chef@firma.test'] = {id:'u1', email:'chef@firma.test', password:'x'};
+      d.profiles.push({id:'u1', email:'chef@firma.test', name:'Chef', role:'admin', approved:true});
+      d.session = {user:{id:'u1', email:'chef@firma.test'}};
+      d.sites.push({id:'a', name:'Testweg', sparte:'tief', lat:47.23, lng:8.83});
+      d.machines.push({id:'%s', name:'Bagger A', typ:'Bagger', sparte:'tief', site_id:'a', status:'running', reason:''},
+                      {id:'%s', name:'<img src=x onerror=window.__xssF=1>', typ:'Walze', sparte:'strasse', site_id:'a', status:'running', reason:''});
+    })();""" % (MA, MB)
+    def foto_page(extra=""):
+        pg_ = new_page(b, True)
+        pg_.route("**/storage/v1/object/sign/**", lambda r: r.fulfill(body=PNG1, content_type="image/jpeg", headers={"access-control-allow-origin": "*"}))
+        pg_.add_init_script(FSEED + extra); pg_.goto(URL + "?modus=leicht"); pg_.wait_for_timeout(900)
+        return pg_
+    fp = foto_page()
+    check("Foto: laeuft die Maschine, gibt es keinen Foto-Knopf", fp.locator("[data-fotoadd]").count() == 0)
+    fp.evaluate("setMachine(machines.find(m => m.id === '%s'), { status:'broken', reason:'' }, 'x')" % MA); fp.wait_for_timeout(300)
+    check("Foto: bei einer offenen Meldung (Defekt) gibt es den Foto-Knopf", fp.locator('[data-fotoadd="%s"]' % MA).count() == 1)
+    with fp.expect_file_chooser() as fc:
+        fp.click('[data-fotoadd="%s"]' % MA)
+    fc.value.set_files(TXT); fp.wait_for_timeout(300)
+    check("Foto: eine Textdatei wird abgelehnt (kein Bild), nichts hochgeladen", "kein Bild" in fp.inner_text("#toast") and fp.evaluate("Object.keys(window.__db.storage.files).length") == 0)
+    fp.evaluate("window.__db.storageFail = 'Bucket not found'")
+    with fp.expect_file_chooser() as fc:
+        fp.click('[data-fotoadd="%s"]' % MA)
+    fc.value.set_files(IMG_A); fp.wait_for_timeout(1200)
+    check("Foto: Fehler beim Hochladen wird gemeldet (mit Hinweis auf die Einrichtung), nichts in der Datenbank", "Foto konnte nicht gespeichert werden" in fp.inner_text("#toast") and "SUPABASE-ANLEITUNG" in fp.inner_text("#toast") and fp.evaluate("window.__db.machines.find(m => m.id === '%s').foto_pfad" % MA) in (None, "") )
+    with fp.expect_file_chooser() as fc:
+        fp.click('[data-fotoadd="%s"]' % MA)
+    fc.value.set_files(IMG_A); fp.wait_for_timeout(1500)
+    row = fp.evaluate("window.__db.machines.find(m => m.id === '%s')" % MA)
+    path1 = row.get("foto_pfad")
+    check("Foto: gespeichert, Pfad ist <Maschinen-Id>/<Zeitstempel>.jpg", bool(path1) and re.fullmatch(MA + r"/\d{13}\.jpg", path1) is not None, str(path1))
+    dims = fp.evaluate("(async()=>{ const b = window.__db.storage.files[%s]; const i = await createImageBitmap(b); return { w:i.width, h:i.height, size:b.size, type:b.type }; })()" % json.dumps(path1))
+    check("Foto: verkleinert auf hoechstens 1280 Pixel, Seitenverhaeltnis bleibt, JPEG unter 1,4 MB", max(dims["w"], dims["h"]) == 1280 and abs(dims["w"] / dims["h"] - 1.5) < 0.01 and dims["type"] == "image/jpeg" and dims["size"] < 1400000, str(dims))
+    check("Foto: Miniatur steht an der Maschine statt des Knopfs", fp.locator('[data-foto="%s"]' % MA).count() == 1 and fp.locator('[data-fotoadd="%s"]' % MA).count() == 0)
+    check("Foto: Miniatur laedt die signierte Adresse", fp.evaluate("document.querySelector('[data-foto] img').src").startswith("https://x.supabase.co/storage/v1/object/sign/meldungsfotos/" + MA))
+    check("Foto: Eintrag im Protokoll", "Foto zur Meldung: Bagger A" in fp.inner_text("#log"))
+    fp.click('[data-foto="%s"]' % MA); fp.wait_for_timeout(300)
+    check("Foto: Fenster zeigt das grosse Foto mit Alternativtext und Meldung", fp.locator("#fotoModal img.fbig").count() == 1 and "Foto zur Meldung: Bagger A" in fp.get_attribute("#fotoModal img.fbig", "alt") and "Defekt" in fp.inner_text("#fotoModal"))
+    with fp.expect_file_chooser() as fc:
+        fp.click("#fotoReplace")
+    fc.value.set_files(IMG_B); fp.wait_for_timeout(1200)
+    path2 = fp.evaluate("window.__db.machines.find(m => m.id === '%s').foto_pfad" % MA)
+    files = fp.evaluate("Object.keys(window.__db.storage.files)")
+    check("Foto: ersetzen speichert das neue und loescht die alte Datei", path2 and path2 != path1 and files == [path2] and fp.locator("#modal").count() == 0, str(files))
+    fp.click('[data-foto="%s"]' % MA); fp.click("#modal >> text=Foto entfernen"); fp.wait_for_timeout(100)
+    check("Foto: entfernen braucht zwei Tipps (erster Tipp fragt nur)", "Sicher? Nochmal tippen" in fp.inner_text("#modal") and fp.evaluate("window.__db.machines.find(m => m.id === '%s').foto_pfad" % MA) == path2)
+    fp.click("#modal >> text=Sicher? Nochmal tippen"); fp.wait_for_timeout(400)
+    check("Foto: entfernen loescht Pfad und Datei, Knopf Foto ist wieder da", fp.evaluate("window.__db.machines.find(m => m.id === '%s').foto_pfad" % MA) in (None, "") and fp.evaluate("Object.keys(window.__db.storage.files).length") == 0 and fp.locator('[data-fotoadd="%s"]' % MA).count() == 1)
+    with fp.expect_file_chooser() as fc:
+        fp.click('[data-fotoadd="%s"]' % MA)
+    fc.value.set_files(IMG_B); fp.wait_for_timeout(1000)
+    path3 = fp.evaluate("window.__db.machines.find(m => m.id === '%s').foto_pfad" % MA)
+    fp.click('#detail .mrow:has-text("Bagger A") >> text=Repariert'); fp.wait_for_timeout(500)
+    check("Foto: Meldung erledigt -> Pfad weg und die Seite loescht die Datei im Speicher", fp.evaluate("window.__db.machines.find(m => m.id === '%s').foto_pfad" % MA) in (None, "") and path3 in fp.evaluate("window.__db.storage.removed") and fp.evaluate("Object.keys(window.__db.storage.files).length") == 0 and fp.locator("[data-foto]").count() == 0)
+    # Meldung wechselt, waehrend das Bild hochgeladen wird: das Foto wird nicht uebernommen, die Datei wird geloescht
+    fp.evaluate("setMachine(machines.find(m => m.id === '%s'), { status:'broken', reason:'' }, 'x')" % MA); fp.wait_for_timeout(300)
+    fp.evaluate("window.__db.afterUpload = p => { const r = window.__db.machines.find(m => m.id === '%s'); r.status = 'running'; r.reason = ''; }" % MA)
+    with fp.expect_file_chooser() as fc:
+        fp.click('[data-fotoadd="%s"]' % MA)
+    fc.value.set_files(IMG_B); fp.wait_for_timeout(1000)
+    check("Foto: Meldung inzwischen erledigt -> nicht gespeichert, Datei geloescht, Hinweis", "inzwischen erledigt" in fp.inner_text("#toast") and fp.evaluate("Object.keys(window.__db.storage.files).length") == 0)
+    # Datenbank lehnt das Speichern des Pfads ab: hochgeladene Datei wird wieder geloescht
+    fp.evaluate("window.__db.machines.find(m => m.id === '%s').status = 'broken'; loadAll();" % MA); fp.wait_for_timeout(300)
+    fp.evaluate("window.__db.afterUpload = p => { window.__db.failNext = { table:'machines', msg:'kaputt' }; }")
+    with fp.expect_file_chooser() as fc:
+        fp.click('[data-fotoadd="%s"]' % MA)
+    fc.value.set_files(IMG_B); fp.wait_for_timeout(1000)
+    check("Foto: Speichern des Pfads scheitert -> Datei wird wieder geloescht, Fehler gemeldet", "kaputt" in fp.inner_text("#toast") and fp.evaluate("Object.keys(window.__db.storage.files).length") == 0)
+    # Benutzertext nie als HTML
+    fp.evaluate("setMachine(machines.find(m => m.id === '%s'), { status:'broken', reason:'' }, 'x')" % MB); fp.wait_for_timeout(300)
+    with fp.expect_file_chooser() as fc:
+        fp.click('[data-fotoadd="%s"]' % MB)
+    fc.value.set_files(IMG_B); fp.wait_for_timeout(1000)
+    fp.click('[data-foto="%s"]' % MB); fp.wait_for_timeout(300)
+    check("Foto: Maschinenname mit HTML wird nur als Text gezeigt (Alternativtext und Titel)", fp.evaluate("window.__xssF") is None and "<img" in fp.get_attribute("#fotoModal img.fbig", "alt"))
+    fp.click("#modal >> text=Schliessen")
+    check("Foto: nach dem Schliessen ist das Fenster weg, kein Ton", fp.locator("#fotoModal").count() == 0 and fp.evaluate("window.__audio") == 0)
+
+    fo = foto_page("window.__db.noFotoCol = true;")
+    fo.evaluate("setMachine(machines.find(m => m.id === '%s'), { status:'broken', reason:'' }, 'x')" % MA); fo.wait_for_timeout(300)
+    check("Foto alte DB ohne Spalte: kein Foto-Knopf, Melden geht weiter", fo.locator("[data-fotoadd]").count() == 0 and fo.evaluate("window.__db.machines.find(m => m.id === '%s').status" % MA) == "broken")
+
+    fd = new_page(b, False); fd.goto(URL + "?modus=leicht"); fd.wait_for_timeout(600)
+    fd.evaluate("setMachine(machines.find(m => m.id === 1), { status:'broken', reason:'' }, 'x')"); fd.wait_for_timeout(200)
+    with fd.expect_file_chooser() as fc:
+        fd.click('[data-fotoadd="1"]')
+    fc.value.set_files(IMG_B); fd.wait_for_timeout(800)
+    check("Foto Demo: Miniatur erscheint, Bild nur im Arbeitsspeicher (blob), nichts wird gespeichert", fd.locator('[data-foto="1"]').count() == 1 and fd.evaluate("document.querySelector('[data-foto] img').src").startswith("blob:"))
+    fd.evaluate("resolve(machines.find(m => m.id === 1))"); fd.wait_for_timeout(200)
+    check("Foto Demo: Meldung erledigt -> Foto weg", fd.locator("[data-foto]").count() == 0 and fd.evaluate("machines.find(m => m.id === 1).foto") is None and fd.evaluate("machines.find(m => m.id === 1).fotoUrl") is None)
+
     # ============================================================ PASSWORT VERGESSEN
     print("=== PASSWORT VERGESSEN ===")
     SEED = "(()=>{const d=window.__db; d.users['chef@firma.test']={id:'u1',email:'chef@firma.test',password:'altes-passwort'}; d.profiles.push({id:'u1',email:'chef@firma.test',name:'Chef',role:'admin',approved:true}); d.sites.push({id:'a',name:'Testweg',sparte:'tief',lat:47.23,lng:8.83});})();"
