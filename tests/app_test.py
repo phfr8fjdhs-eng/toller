@@ -958,7 +958,7 @@ with sync_playwright() as p:
     check("Erneuern: Bahn wird nicht als Strasse benutzt", not any(abs(p[0] - 8.8405) < 1e-9 and p[1] > 47.2301 for p in path))
     exp_len = z.evaluate("drawingMeasure({ geom:{ type:'LineString', coordinates:drawState.pts } })")
     check("Erneuern: Laenge angezeigt, Fertig moeglich", exp_len in z.inner_text("#drawText") and exp_len == "ca. 430 m" and not z.locator("#drawDone").is_disabled(), exp_len)
-    check("Erneuern: Seiten nach Himmelsrichtung waehlbar", z.inner_text("#side-links") == "Nur Nordseite" and z.inner_text("#side-rechts") == "Nur Südseite" and "on" in z.get_attribute("#side-beide", "class"))
+    check("Erneuern: Seiten nach Fahrtrichtung waehlbar (Rechtsverkehr: links = Gegenrichtung)", z.inner_text("#side-links") == "Nur Fahrtrichtung Westen" and z.inner_text("#side-rechts") == "Nur Fahrtrichtung Osten" and "on" in z.get_attribute("#side-beide", "class"))
     z.click("#side-links"); z.wait_for_timeout(50)
     band = [f["properties"] for f in z.evaluate("__mapData['draw-preview'].features") if f["geometry"]["type"] == "LineString"]
     check("Erneuern: Vorschau zeigt nur die gewaehlte Seite (halbe Breite, versetzt)", band and band[0]["band"] is True and band[0]["w"] == 0.5 and band[0]["off"] == -1)
@@ -969,7 +969,12 @@ with sync_playwright() as p:
     z.click("#drawDone"); z.wait_for_timeout(100)
     ern = z.evaluate("drawings.filter(d => d.kind === 'erneuern')")
     check("Erneuern: gespeichert mit Seite und der Linie entlang der Strasse", len(ern) == 1 and ern[0]["seite"] == "links" and ern[0]["geom"]["coordinates"] == path)
-    check("Erneuern: Liste und Karte nennen 'nur Nordseite'", "Strasse erneuern · nur Nordseite" in z.inner_text("#detail") and any(x["kind"] == "erneuern" and x["w"] == 0.5 and x["off"] == -1 and "nur Nordseite" in x["text"] for x in z.evaluate("__mapData.drawings.features.map(f => f.properties)")))
+    check("Erneuern: Liste und Karte nennen 'nur Fahrtrichtung Westen'", "Strasse erneuern · nur Fahrtrichtung Westen" in z.inner_text("#detail") and any(x["kind"] == "erneuern" and x["w"] == 0.5 and x["off"] == -1 and "nur Fahrtrichtung Westen" in x["text"] for x in z.evaluate("__mapData.drawings.features.map(f => f.properties)")))
+    rd = z.evaluate("JSON.stringify(['road-dir-one', 'road-dir-hin', 'road-dir-her', 'dr-ern-dir'].map(k => __mapLayers[k] || null))")
+    rd = json.loads(rd)
+    check("Karte: Pfeile in Fahrtrichtung auf den Strassen (Einbahn in der Mitte, sonst je Richtung rechts)", all(rd[:3]) and all(x["type"] == "symbol" and x["source-layer"] == "transportation" and x["layout"]["symbol-placement"] == "line" for x in rd[:3])
+          and "oneway" in json.dumps(rd[0]["filter"]) and rd[2]["layout"]["icon-rotate"] == 180 and "icon-rotate" not in rd[1]["layout"] and z.evaluate("__mapImages.indexOf ? __mapImages.indexOf('pfeil') >= 0 : !!__mapImages.pfeil"))
+    check("Erneuern: Pfeile auf dem Band zeigen die betroffene Fahrtrichtung", rd[3] and rd[3]["layout"]["icon-image"] == "pfeil-ern" and "off" in json.dumps(rd[3]["layout"]["icon-rotate"]) and "erneuern" in json.dumps(rd[3]["filter"]))
     ly = z.evaluate("__mapLayers")
     check("Erneuern: rot-weiss gestreift (rote Linie mit weissen Streifen), nicht blinkend", ly["dr-ern-full"]["paint"]["line-color"] == "#d93a3a" and ly["dr-ern-full-w"]["paint"]["line-dasharray"] == [1, 1] and ly["dr-ern-half-w"]["paint"]["line-color"] == "#ffffff" and "broken" not in str(ly["dr-ern-full"]["paint"]))
     # Vereinfachte Kartendaten: gemeinsamer Punkt an der Kreuzung fehlt (Einmündung, Kreuzung), Brücke darf nicht verbinden

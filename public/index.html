@@ -848,14 +848,15 @@ const LEITUNG_HINWEIS = "Gezeichnete Leitungen sind eine Skizze und ersetzen kei
 const mapDrawing = r => ({ id:r.id, site:r.site_id, kind:r.kind, geom:r.geom, label:r.label || "", seite:r.seite || "beide", by:r.author || "", createdBy:r.created_by, at:r.created_at });
 let seiteOk = true;    // false, wenn die Spalte drawings.seite noch fehlt (schema.sql erneut ausführen)
 
-// Welche Himmelsrichtung ist "links" bzw. "rechts" einer Linie (von Anfang zu Ende)? Für "nur Nordseite" usw.
+/* Welche Fahrtrichtung ist "links" bzw. "rechts" einer Linie (von Anfang zu Ende)? Rechtsverkehr: auf der rechten Seite
+   fährt man in Zeichnungsrichtung, auf der linken entgegen. Für "nur Fahrtrichtung Osten" usw. */
 function sideNames(pts){
   const a = pts[0], b = pts[pts.length - 1] || a;
   const kx = 111320 * Math.cos(a[1] * Math.PI / 180), ky = 110574;
   let dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky;
   if(Math.hypot(dx, dy) < 1 && pts[1]){ dx = (pts[1][0] - a[0]) * kx; dy = (pts[1][1] - a[1]) * ky; }
-  const name = (x, y) => Math.abs(x) > Math.abs(y) ? (x > 0 ? "Ostseite" : "Westseite") : (y > 0 ? "Nordseite" : "Südseite");
-  return { links:name(-dy, dx), rechts:name(dy, -dx) };
+  const name = (x, y) => "Fahrtrichtung " + (Math.abs(x) > Math.abs(y) ? (x > 0 ? "Osten" : "Westen") : (y > 0 ? "Norden" : "Süden"));
+  return { links:name(-dx, -dy), rechts:name(dx, dy) };
 }
 const sideOf = d => (d.seite && d.seite !== "beide" && d.geom && d.geom.type === "LineString") ? sideNames(d.geom.coordinates)[d.seite] : "";
 function upsertDrawing(d){ const i = drawings.findIndex(x => x.id === d.id); if(i >= 0) drawings[i] = d; else drawings.push(d); }
@@ -2291,6 +2292,35 @@ function treeIconUrl(){
   svg.appendChild(sv("circle", { cx:24, cy:24, r:3, fill:"#3a2a1a" }));
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(svg));
 }
+// Pfeil in Fahrtrichtung (zeigt nach rechts, MapLibre dreht ihn entlang der Strasse)
+function arrowIconUrl(fill, edge){
+  const svg = sv("svg", { xmlns:SVGNS, width:40, height:40, viewBox:"0 0 40 40" });
+  svg.appendChild(sv("path", { d:"M5 16 H21 V8 L36 20 L21 32 V24 H5 Z", fill:fill, stroke:edge, "stroke-width":2.5, "stroke-linejoin":"round" }));
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+}
+/* Fahrtrichtungen auf den Strassen der Grundkarte (Daten: OpenStreetMap, Feld oneway). Einbahnstrassen: Pfeile in der Mitte.
+   Übrige Strassen: nah je ein Pfeil pro Richtung, rechts von der Mitte (Rechtsverkehr), wie in einer Navigationskarte.
+   Abbiegespuren stehen nicht in den Daten. src/srcLayer als Parameter, damit sich die Ebenen einzeln prüfen lassen. */
+function roadDirLayers(src, srcLayer){
+  const one = ["match", ["coalesce", ["get", "oneway"], 0], [1, -1], true, false];
+  const cls = ["match", ["get", "class"], ["motorway", "trunk", "primary", "secondary", "tertiary", "minor", "service"], true, false];
+  const two = ["match", ["get", "class"], ["trunk", "primary", "secondary", "tertiary", "minor"], true, false];
+  const lane = ["interpolate", ["exponential", 2], ["zoom"], 16.5, ["literal", [0, 5]], 20, ["literal", [0, 56]]];   // etwa 1.5 m neben der Mitte
+  const base = (id, minzoom, filter, layout) => {
+    const l = { id, type:"symbol", source:src, minzoom, filter,
+      layout:Object.assign({ "symbol-placement":"line", "symbol-spacing":["interpolate", ["linear"], ["zoom"], 15, 90, 19, 220],
+        "icon-image":"pfeil", "icon-rotation-alignment":"map", "icon-pitch-alignment":"map", "icon-allow-overlap":true, "icon-ignore-placement":true,
+        "icon-size":["interpolate", ["linear"], ["zoom"], 15, 0.6, 19, 1.1] }, layout),
+      paint:{ "icon-opacity":0.85 } };
+    if(srcLayer) l["source-layer"] = srcLayer;
+    return l;
+  };
+  return [
+    base("road-dir-one", 15, ["all", cls, one], { "icon-rotate":["case", ["==", ["get", "oneway"], -1], 180, 0] }),
+    base("road-dir-hin", 16.5, ["all", two, ["!", one]], { "icon-offset":lane }),
+    base("road-dir-her", 16.5, ["all", two, ["!", one]], { "icon-offset":lane, "icon-rotate":180 })
+  ];
+}
 function addMapImage(id, url, size){
   return new Promise(res=>{
     const img = new Image(size, size);
@@ -2335,6 +2365,9 @@ function addMapLayers(){
       } });
   }
   addMapImage("baum", treeIconUrl(), 48);
+  addMapImage("pfeil", mapTheme === "hell" ? arrowIconUrl("#5b6672", "#ffffff") : arrowIconUrl("#f2f4f6", "#1b232c"), 40);
+  addMapImage("pfeil-ern", arrowIconUrl("#ffffff", "#7a1414"), 40);
+  if(vec) roadDirLayers(vec, "transportation").forEach(add);
   MACH_KINDS.forEach(k => ["running", "waiting", "broken", "off"].forEach(st => addMapImage("mi-" + k + "-" + st, machIconUrl(k, st), 64)));
   const g = siteGeo();
   lmap.addSource("site-areas", { type:"geojson", data:g.areas });
@@ -2372,6 +2405,14 @@ function addMapLayers(){
     paint:{ "line-color":"#d93a3a", "line-width":halfW, "line-offset":halfOff, "line-opacity":dop(0.95) } });
   add({ id:"dr-ern-half-w", type:"line", source:"drawings", filter:["all", ern, ["<", ["get", "w"], 1]],
     paint:{ "line-color":"#ffffff", "line-width":halfW, "line-offset":halfOff, "line-dasharray":[1, 1], "line-opacity":dop(0.9) } });
+  // Nur eine Fahrtrichtung: weisse Pfeile auf dem Band zeigen, welche Richtung betroffen ist
+  add({ id:"dr-ern-dir", type:"symbol", source:"drawings", minzoom:15, filter:["all", ern, ["<", ["get", "w"], 1]],
+    layout:{ "symbol-placement":"line", "symbol-spacing":["interpolate", ["linear"], ["zoom"], 15, 70, 19, 170], "icon-image":"pfeil-ern",
+             "icon-rotation-alignment":"map", "icon-pitch-alignment":"map", "icon-allow-overlap":true, "icon-ignore-placement":true,
+             "icon-size":["interpolate", ["linear"], ["zoom"], 15, 0.55, 19, 1],
+             "icon-rotate":["case", ["==", ["get", "off"], -1], 180, 0],
+             "icon-offset":["interpolate", ["exponential", 2], ["zoom"], 14, ["literal", [0, 0.8]], 20, ["literal", [0, 48]]] },
+    paint:{ "icon-opacity":dop(1) } });
   add({ id:"dr-line", type:"line", source:"drawings", filter:["==", ["get", "kind"], "hecke"],
     layout:{ "line-cap":"round", "line-join":"round" },
     paint:{ "line-color":["get", "color"], "line-opacity":dop(1), "line-width":["interpolate", ["linear"], ["zoom"], 14, 2, 19, 7] } });
