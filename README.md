@@ -23,6 +23,7 @@ Eine Störung erscheint als rotes Banner und blinkende Maschine. Es gibt bewusst
 - "Wartung" an jeder Maschine: Betriebsstunden, Service-Intervall und Termin von Hand eintragen. Ist der Service fällig, steht es als Text an der Maschine, als Chip "Service fällig" oben und als ruhiger Hinweis (kein Blinken, kein Ton). "Service erledigt" setzt den Zähler zurück
 - Fällt die Verbindung weg, steht oben ein Hinweis mit der Uhrzeit des letzten Stands. Änderungen werden dann nicht gespeichert und auf der Seite zurückgenommen
 - "Verlauf": zeigt, welche Maschine wie oft und wie lange gestört war oder auf Material oder Diesel gewartet hat. Die Datenbank schreibt mit, niemand kann es von Hand ändern
+- "Verlauf": Zeitraum "Letzte 7 Tage" ist der Wochenbericht. "Als CSV exportieren" lädt den Zeitraum als Datei für Excel, "Bericht kopieren" legt eine Textzusammenfassung für eine Mail in die Zwischenablage
 - Passwort vergessen: Im Login auf "Passwort vergessen?" tippen, E-Mail eingeben, Link in der Mail öffnen, neues Passwort setzen
 - Admin: Im Fenster "Neue Baustelle" kannst du den Text einer Offerte oder Beschreibung einfügen. Du bekommst einen Vorschlag für Name, Sparte, Ort auf der Karte und Bedarf. Du prüfst und speicherst. Preise werden nicht übernommen und der Text wird nicht gespeichert (PDF: Text kopieren)
 

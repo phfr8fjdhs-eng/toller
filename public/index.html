@@ -3689,12 +3689,100 @@ function modalTables(tab){
   draw();
 }
 
+// Export und Bericht des Verlaufs. Zahlen kommen unverändert aus dem Verlauf (Beginn = Meldung, Ende = Erledigt), offene Einträge
+// zählen bis jetzt und sind als offen markiert. Excel in der Schweiz: Semikolon, UTF-8 mit BOM, Zellen, die mit = + - @ beginnen,
+// bekommen ein Hochkomma davor (sonst führt Excel Text aus Namen oder Hinweisen als Formel aus).
+const pad2 = n => ("0" + n).slice(-2);
+const dtCh = ms => { const d = new Date(ms); return pad2(d.getDate()) + "." + pad2(d.getMonth() + 1) + "." + d.getFullYear() + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()); };
+function csvCell(v){
+  let t = String(v === null || v === undefined ? "" : v).replace(/[\r\n]+/g, " ");
+  if(/^[=+\-@\t]/.test(t)) t = "'" + t;
+  return /[";]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+function historyCsv(rows){
+  const now = Date.now();
+  const lines = [["Art", "Maschine", "Maschinenart", "Baustelle", "Grund", "Gemeldet von", "Beginn", "Ende", "Dauer in Minuten", "Noch offen"].map(csvCell).join(";")];
+  rows.forEach(r => lines.push([r.kind === "broken" ? "Defekt" : "wartet", r.name, r.typ, r.site, r.reason, r.by, dtCh(r.start), r.end ? dtCh(r.end) : "",
+    Math.round(((r.end || now) - r.start) / 60000), r.end ? "nein" : "ja"].map(csvCell).join(";")));
+  return "﻿" + lines.join("\r\n") + "\r\n";
+}
+function historyReport(rows, label){
+  const now = Date.now(), dur = r => (r.end || now) - r.start;
+  const out = ["Störungsbericht: " + label + " (Stand " + dtCh(now) + ")", ""];
+  [["broken", "Defekte"], ["waiting", "Wartezeiten (Material oder Diesel)"]].forEach(k=>{
+    const l = rows.filter(r => r.kind === k[0]);
+    out.push(k[1] + ": " + l.length + " (offen: " + l.filter(r => !r.end).length + ") · Dauer zusammen: " + (l.length ? fmtDur(l.reduce((a, r) => a + dur(r), 0)) : "–"));
+  });
+  const per = new Map();
+  rows.forEach(r=>{
+    const key = r.machineId || ("n:" + r.name);
+    const p = per.get(key) || { name:r.name, b:0, bt:0, w:0, wt:0 };
+    if(r.kind === "broken"){ p.b++; p.bt += dur(r); } else { p.w++; p.wt += dur(r); }
+    per.set(key, p);
+  });
+  const list = Array.from(per.values()).sort((a, b) => (b.bt + b.wt) - (a.bt + a.wt));
+  if(list.length){
+    out.push("", "Nach Maschine (längste Dauer zuerst):");
+    list.forEach(p => out.push("- " + p.name + ": " + [p.b ? "Defekt " + p.b + "× · " + fmtDur(p.bt) : "", p.w ? "wartet " + p.w + "× · " + fmtDur(p.wt) : ""].filter(Boolean).join(" | ")));
+  } else out.push("", "In diesem Zeitraum wurde keine Störung und keine Wartezeit gemeldet.");
+  out.push("", "Die Zeiten zeigen, wie lange eine Meldung offen war, nicht eine Messung an der Maschine. Maschinen ohne Meldung erscheinen nicht.");
+  return out.join("\n");
+}
+function downloadText(name, text, type){
+  const url = URL.createObjectURL(new Blob([text], { type:type + ";charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.style.display = "none";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+async function copyText(text){                       // true, wenn kopiert
+  try{ if(navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(text); return true; } }catch(e){}
+  try{
+    const t = document.createElement("textarea"); t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+    document.body.appendChild(t); t.select(); const ok = document.execCommand("copy"); t.remove(); return !!ok;
+  }catch(e){ return false; }
+}
+
 function modalHistory(){
   const body = el("div");
-  const range = select([["30", "Letzte 30 Tage"], ["90", "Letzte 90 Tage"], ["365", "Letztes Jahr"]], "30", "h-range");
+  const range = select([["7", "Letzte 7 Tage (Wochenbericht)"], ["30", "Letzte 30 Tage"], ["90", "Letzte 90 Tage"], ["365", "Letztes Jahr"]], "30", "h-range");
   body.appendChild(field("Zeitraum", range));
+  const tools = el("div", "acts"); tools.style.justifyContent = "flex-start";
+  const bCsv = el("button", "", "Als CSV exportieren"); bCsv.type = "button"; bCsv.id = "h-csv";
+  const bRep = el("button", "", "Bericht kopieren"); bRep.type = "button"; bRep.id = "h-report";
+  tools.appendChild(bCsv); tools.appendChild(bRep); body.appendChild(tools);
+  const reportBox = el("textarea"); reportBox.id = "h-reportText"; reportBox.readOnly = true; reportBox.hidden = true; reportBox.rows = 10; body.appendChild(reportBox);
   const box = el("div"); box.id = "histBox"; body.appendChild(box);
   let seq = 0;
+  const rangeLabel = ()=>range.options[range.selectedIndex].text.replace(/ \(Wochenbericht\)$/, "");
+  // Alle Einträge des Zeitraums für Export und Bericht (nicht nur die 500 der Anzeige): Live bis EXPORT_MAX aus der Datenbank
+  const EXPORT_MAX = 5000;
+  const allRows = async ()=>{
+    const since = Date.now() - Number(range.value) * 864e5;
+    if(!LIVE) return { rows:demoDowntimes.filter(r => r.start >= since).sort((a, b) => b.start - a.start), capped:false };
+    const r = await sb.from("downtimes").select("*").gte("started_at", new Date(since).toISOString()).order("started_at", { ascending:false }).limit(EXPORT_MAX);
+    if(r.error) return { error:r.error.message };
+    return { rows:r.data.map(mapDowntime), capped:r.data.length >= EXPORT_MAX };
+  };
+  bCsv.onclick = async ()=>{
+    bCsv.disabled = true;
+    const x = await allRows();
+    bCsv.disabled = false;
+    if(x.error){ toast("Export fehlgeschlagen: " + x.error, true); return; }
+    if(!x.rows.length){ toast("In diesem Zeitraum gibt es nichts zu exportieren."); return; }
+    const d = new Date();
+    downloadText("stoerungsverlauf-" + d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + ".csv", historyCsv(x.rows), "text/csv");
+    toast(x.rows.length + (x.rows.length === 1 ? " Eintrag" : " Einträge") + " exportiert" + (x.capped ? " (nur die neusten " + EXPORT_MAX + ", bitte einen kürzeren Zeitraum wählen)" : ""), x.capped);
+  };
+  bRep.onclick = async ()=>{
+    bRep.disabled = true;
+    const x = await allRows();
+    bRep.disabled = false;
+    if(x.error){ toast("Bericht fehlgeschlagen: " + x.error, true); return; }
+    const text = historyReport(x.rows, rangeLabel()) + (x.capped ? "\n(Nur die neusten " + EXPORT_MAX + " Einträge, bitte einen kürzeren Zeitraum wählen.)" : "");
+    if(await copyText(text)){ reportBox.hidden = true; toast("Bericht kopiert. Jetzt in eine Mail oder ein Dokument einfügen."); }
+    else { reportBox.value = text; reportBox.hidden = false; reportBox.select(); toast("Kopieren ging nicht. Der Text steht unten, bitte von Hand kopieren.", true); }
+  };
   const load = async ()=>{
     const my = ++seq;
     box.innerHTML = ""; box.appendChild(el("div", "empty", "Lade …"));

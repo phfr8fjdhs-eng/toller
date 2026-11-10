@@ -733,6 +733,55 @@ with sync_playwright() as p:
     check("Verlauf Live: nach 'Weitere anzeigen' sind es 80", hm.locator("#histBox .hrow .hk").count() == 80)
     hm.click("#modal >> text=Schliessen")
 
+    # ============================================================ EXPORT UND BERICHT DES VERLAUFS
+    print("=== EXPORT UND BERICHT ===")
+    ex = new_page(b, False); ex.goto(URL + "?modus=leicht"); ex.wait_for_timeout(600)
+    ex.evaluate("machines.find(m => m.id === 1).name = '=HYPERLINK(\"http://x.test\";\"Klick\")'; setMachine(machines.find(m => m.id === 1), { status:'broken', reason:'' }, 'x'); setMachine(machines.find(m => m.id === 1), { status:'running', reason:'' }, 'x')")
+    ex.evaluate("setMachine(machines.find(m => m.id === 4), { status:'waiting', reason:'Material fehlt: Kies; \"0/32\"' }, 'x')")
+    ex.click("#historyBtn")
+    check("Export: Zeitraum 'Letzte 7 Tage (Wochenbericht)' ist waehlbar", ex.locator("#h-range option").first.inner_text() == "Letzte 7 Tage (Wochenbericht)")
+    ex.select_option("#h-range", "7"); ex.wait_for_timeout(100)
+    with ex.expect_download() as dl:
+        ex.click("#h-csv")
+    path = dl.value.path()
+    raw = open(path, "rb").read()
+    csv = raw.decode("utf-8")
+    lines = csv.strip().split("\r\n")
+    check("Export: Datei heisst stoerungsverlauf-JJJJ-MM-TT.csv", re.fullmatch(r"stoerungsverlauf-\d{4}-\d\d-\d\d\.csv", dl.value.suggested_filename) is not None, dl.value.suggested_filename)
+    check("Export: UTF-8 mit BOM (Umlaute stimmen in Excel)", raw[:3] == b"\xef\xbb\xbf" and "Maschinenart" in lines[0])
+    check("Export: Kopfzeile, Semikolon als Trenner, Zeilenende fuer Windows", lines[0].lstrip("\ufeff") == "Art;Maschine;Maschinenart;Baustelle;Grund;Gemeldet von;Beginn;Ende;Dauer in Minuten;Noch offen" and csv.endswith("\r\n"))
+    check("Export: zwei Eintraege (Defekt erledigt, Wartezeit offen)", len(lines) == 3, str(len(lines)))
+    check("Export: Name mit = am Anfang bekommt ein Hochkomma (keine Excel-Formel)", any(l.startswith('Defekt;"\'=HYPERLINK(') for l in lines))
+    check("Export: Semikolon und Anfuehrungszeichen im Grund sind sauber maskiert", '"Material fehlt: Kies; ""0/32"""' in csv)
+    check("Export: offene Wartezeit ist als offen markiert, erledigter Defekt nicht", any(l.startswith("wartet;") and l.endswith(";ja") for l in lines) and any(l.startswith("Defekt;") and l.endswith(";nein") for l in lines))
+    check("Export: Beginn im Format TT.MM.JJJJ HH:MM", re.search(r";\d\d\.\d\d\.\d{4} \d\d:\d\d;", csv) is not None)
+    check("Export: Toast nennt die Anzahl", "2 Einträge exportiert" in ex.inner_text("#toast"))
+    ex.click("#h-report"); ex.wait_for_timeout(300)
+    rep = ex.evaluate("(()=>{ const t = $('h-reportText'); return t.hidden ? null : t.value; })()")
+    toast_txt = ex.inner_text("#toast")
+    check("Bericht: kopiert (oder, wenn der Browser es verbietet, steht der Text zum Kopieren da)", ("kopiert" in toast_txt and "Kopieren ging nicht" not in toast_txt) or (rep and "Störungsbericht" in rep), toast_txt)
+    txt = ex.evaluate("historyReport(demoDowntimes, 'Letzte 7 Tage')")
+    check("Bericht: Titel, Defekte, Wartezeiten, je Maschine und der ehrliche Hinweis", all(w in txt for w in ["Störungsbericht: Letzte 7 Tage (Stand ", "Defekte: 1 (offen: 0)", "Wartezeiten (Material oder Diesel): 1 (offen: 1)", "Nach Maschine", "Walze 1: wartet 1×", "nicht eine Messung an der Maschine"]) and "%" not in txt)
+    check("Bericht: Titel ohne den Zusatz (Wochenbericht)", "(Wochenbericht)" not in txt)
+    ex.click("#modal >> text=Schliessen")
+    check("Export: nach dem Schliessen ist alles weg (Fenster, Textfeld, Download-Link)", ex.locator("#modal").count() == 0 and ex.locator("#h-reportText").count() == 0 and ex.locator("a[download]").count() == 0)
+    ex.evaluate("demoDowntimes.length = 0"); ex.click("#historyBtn"); ex.click("#h-csv"); ex.wait_for_timeout(150)
+    check("Export: ohne Eintraege wird keine leere Datei gebaut", "nichts zu exportieren" in ex.inner_text("#toast"))
+    ex.click("#modal >> text=Schliessen")
+
+    EXSEED = WSEED + """(()=>{ const d = window.__db, T = Date.now(); for(let i = 0; i < 620; i++) d.downtimes.push({ id:1000 + i, machine_id:'m1', machine_name:'Bagger A', typ:'Bagger', site_name:'Testweg', kind:'broken', reason:'', reported_name:'Chef', started_at:new Date(T - (i + 1) * 600000).toISOString(), ended_at:new Date(T - i * 600000 - 300000).toISOString() }); })();"""
+    el_ = new_page(b, True); el_.add_init_script(EXSEED); el_.goto(URL + "?modus=leicht"); el_.wait_for_timeout(900)
+    el_.click("#historyBtn"); el_.wait_for_timeout(300)
+    check("Export Live: Anzeige ist auf 500 begrenzt und sagt es", "nur die neusten 500" in el_.inner_text("#histBox"))
+    with el_.expect_download() as dl2:
+        el_.click("#h-csv")
+    rows2 = dl2.value.path()
+    n2 = len(open(rows2, "rb").read().decode("utf-8").strip().split("\r\n")) - 1
+    check("Export Live: CSV enthaelt alle 620 Eintraege, nicht nur die 500 der Anzeige", n2 == 620, str(n2))
+    el_.evaluate("window.__db.failNext = { table:'downtimes', msg:'kaputt' }"); el_.click("#h-csv"); el_.wait_for_timeout(300)
+    check("Export Live: Fehler der Datenbank wird gemeldet, kein Absturz", "Export fehlgeschlagen" in el_.inner_text("#toast") and el_.locator("#modal").count() == 1)
+    el_.click("#modal >> text=Schliessen")
+
     # ============================================================ PASSWORT VERGESSEN
     print("=== PASSWORT VERGESSEN ===")
     SEED = "(()=>{const d=window.__db; d.users['chef@firma.test']={id:'u1',email:'chef@firma.test',password:'altes-passwort'}; d.profiles.push({id:'u1',email:'chef@firma.test',name:'Chef',role:'admin',approved:true}); d.sites.push({id:'a',name:'Testweg',sparte:'tief',lat:47.23,lng:8.83});})();"
