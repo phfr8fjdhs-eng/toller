@@ -79,7 +79,13 @@ Viele Handys sind gleichzeitig verbunden und sehen denselben Stand.
 - Handy zuerst: Bedienung mit dem Finger, grosse Buttons, auf kleinen Bildschirmen keine seitliche Scrollleiste
 - Schreibweise Schweiz: "Strassenbau" mit ss
 - Kleine Schritte: nach jeder fertigen Funktion ein Commit mit klarer Nachricht auf Deutsch
-- Vor größeren Änderungen erst einen Plan zeigen
+
+## Arbeitsweise
+- Vor jeder Änderung zuerst den betroffenen Code lesen und kurz nachdenken, was die beste Lösung ist. Bei grösseren Änderungen kurz den Plan nennen, dann **direkt umsetzen, ohne auf ein OK zu warten**
+- Nur ändern, was verlangt wurde. Nichts nebenbei umbauen
+- Nach der Änderung selbst prüfen (Tests in `tests/`, Leicht-Modus und 3D-Modus) und am Ende kurz zusammenfassen: was geändert, was geprüft
+- Nur nachfragen, wenn etwas wirklich unklar ist (zum Beispiel beim Standort der Mitarbeiter, siehe "Aufgaben für später")
+- Antworten auf Deutsch
 
 ## Tests
 - Alles in `tests/`: `db_test.sh` (Schema und Zugriffsregeln auf lokaler PostgreSQL, braucht Root-Rechte), `app_test.py` (Seite im Browser mit Ersatz-Datenbank aus `stubs.js`, braucht Playwright), `speicher_test.py` (Heap und Seitenelemente im Leicht-Modus, braucht Playwright)
