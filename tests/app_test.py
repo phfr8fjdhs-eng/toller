@@ -640,6 +640,28 @@ with sync_playwright() as p:
     wo.evaluate("setMachine(machines.find(m => m.id === 'm1'), { status:'broken', reason:'' }, 'x')"); wo.wait_for_timeout(300)
     check("Wartung alte DB: Stoerung melden geht weiter", wo.evaluate("window.__db.machines.find(m => m.id === 'm1').status") == "broken")
 
+    # ============================================================ VERBINDUNG
+    print("=== VERBINDUNG ===")
+    cn = new_page(b, True); cn.add_init_script(WSEED); cn.goto(URL + "?modus=leicht"); cn.wait_for_timeout(900)
+    check("Verbindung: online -> kein Hinweis, live angezeigt", cn.locator("#connBanner.show").count() == 0 and "live" in cn.inner_text("#conn"))
+    cn.evaluate("window.dispatchEvent(new Event('offline'))"); cn.wait_for_timeout(100)
+    hint = cn.inner_text("#connBanner")
+    check("Verbindung: offline -> Hinweis mit Uhrzeit des letzten Stands und dass nichts gespeichert wird", cn.locator("#connBanner.show").count() == 1 and re.search(r"Stand von \d\d:\d\d", hint) and "nicht gespeichert" in hint and "getrennt" in cn.inner_text("#conn"), hint)
+    check("Verbindung: der Hinweis blinkt nicht und ist kein Stoerungs-Banner", cn.evaluate("getComputedStyle($('connBanner')).animationName") == "none" and cn.locator("#banner.show").count() == 0)
+    cn.evaluate("window.__db.failNext = { table:'machines', msg:'TypeError: Failed to fetch' }")
+    cn.click('#detail .mrow >> nth=0 >> text=Defekt'); cn.wait_for_timeout(400)
+    check("Verbindung: Melden ohne Verbindung wird nicht gespeichert, die Seite zeigt wieder den echten Stand (laeuft)", cn.evaluate("machines.find(m => m.id === 'm1').status") == "running" and cn.evaluate("window.__db.machines.find(m => m.id === 'm1').status") == "running" and cn.locator("#banner.show").count() == 0)
+    check("Verbindung: Fehler wird gemeldet und die Stoerung wird nicht mitgezaehlt", "Speichern fehlgeschlagen" in cn.inner_text("#toast") and "Störungen: 0" in cn.inner_text("#incidents"), cn.inner_text("#incidents"))
+    cn.evaluate("setConn(true)"); cn.wait_for_timeout(100)
+    check("Verbindung: wieder da -> Hinweis weg", cn.locator("#connBanner.show").count() == 0 and "live" in cn.inner_text("#conn"))
+    cn.click('#detail .mrow >> nth=0 >> text=Defekt'); cn.wait_for_timeout(300)
+    check("Verbindung: mit Verbindung wird die Stoerung gespeichert und gezaehlt", cn.evaluate("window.__db.machines.find(m => m.id === 'm1').status") == "broken" and "Störungen: 1" in cn.inner_text("#incidents"))
+    cn.evaluate("window.dispatchEvent(new Event('online'))"); cn.wait_for_timeout(300)
+    check("Verbindung: 'online' laedt den Stand neu, ohne die Seite zu stoeren", cn.evaluate("machines.find(m => m.id === 'm1').status") == "broken" and cn.locator("#connBanner.show").count() == 0)
+    dn = new_page(b, False); dn.goto(URL + "?modus=leicht"); dn.wait_for_timeout(600)
+    dn.evaluate("window.dispatchEvent(new Event('offline'))"); dn.wait_for_timeout(100)
+    check("Verbindung: Demo hat keinen Verbindungshinweis (nichts wird geteilt)", dn.locator("#connBanner.show").count() == 0)
+
     # ============================================================ VERLAUF DER STOERUNGEN
     print("=== VERLAUF ===")
     hd = new_page(b, False); hd.goto(URL + "?modus=leicht"); hd.wait_for_timeout(600)

@@ -45,6 +45,8 @@
   .svc.due{font-weight:600}
   .svctag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#1b1233;background:var(--svc)}
   .dot.svc{background:var(--svc)}
+  #connBanner{display:none;background:#2a3542;color:#e6edf3;border-bottom:2px solid var(--muted);padding:8px 16px;font-weight:600;font-size:14px}
+  #connBanner.show{display:block}
   #banner{display:none;background:var(--bad);color:#fff;padding:10px 16px;font-weight:600}
   #banner.show{display:block;animation:pulse 1s infinite}
   main{display:grid;grid-template-columns:1fr 360px;gap:16px;padding:16px}
@@ -299,6 +301,7 @@
 <div id="demoNote" hidden>Demo-Modus: erfundene Daten, nichts wird gespeichert und nichts wird mit anderen Handys geteilt.</div>
 <div id="banner" role="alert"></div>
 <div id="svcBanner" role="status"></div>
+<div id="connBanner" role="status"></div>
 <main>
   <section>
     <div id="map">
@@ -579,13 +582,16 @@ async function addLog(text){
 /* =============================================================== Daten: Änderungen */
 function onBreak(){ incidents++; }   // zählt jede neue Störung einmal (Wechsel auf "broken"), auch von anderen Handys
 
-async function dbMachine(m, patch){
+async function dbMachine(m, patch, prev, counted){
   const row = {};
   if("status" in patch) row.status = patch.status;
   if("reason" in patch) row.reason = patch.reason;
   if("site" in patch) row.site_id = patch.site;
   const r = await sb.from("machines").update(row).eq("id", m.id);
-  if(r.error){ toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll(); }
+  if(r.error){
+    if(prev){ Object.assign(m, prev); if(counted && incidents > 0) incidents--; render(); }   // nicht gespeichert: nie einen Stand zeigen, den es nicht gibt
+    toast("Speichern fehlgeschlagen: " + r.error.message, true); loadAll();
+  }
 }
 
 // Wer hat gemeldet und wann: in Live setzt die Datenbank das selbst (Trigger machines_stamp).
@@ -608,13 +614,14 @@ function reportedBy(m){
 
 function setMachine(m, patch, logText){
   const old = m.status, before = { status:m.status, reason:m.reason };
+  const prev = { status:m.status, reason:m.reason, site:m.site, by:m.by, at:m.at };
   Object.assign(m, patch);
   stampLocal(m, before);
   trackDemo(m, before);
   if(old !== "broken" && m.status === "broken") onBreak();
   if(logText) addLog(logText);
   render();
-  if(LIVE) dbMachine(m, patch);
+  if(LIVE) dbMachine(m, patch, prev, old !== "broken" && m.status === "broken");
 }
 
 // Der Grund einer Materialmeldung: "Material fehlt: Kies 0/32" oder mit Hinweis "Material fehlt: Kies 0/32 · ca. 20 m³".
@@ -4034,6 +4041,7 @@ function stopLive(){
   if(channel){ try{ sb.removeChannel(channel); }catch(e){} channel = null; }
   sites = []; machines = []; needs = []; needsOk = true; customMats = []; matsOk = true; logs.length = 0; seenLog.clear(); selected = null;
   me = null; subscribedOnce = false; didOverview = false;
+  connOk = true; lastSync = null; renderConnBanner();
   $("conn").hidden = true;
 }
 
@@ -4106,25 +4114,40 @@ async function loadAll(){
   res[2].data.slice().reverse().forEach(r => pushLog(r.text, r.created_at, r.id));
   if(selected && !findSite(selected)) selected = null;
   if(!selected && sites.length) selected = sites[0].id;
+  lastSync = new Date();
   render();
   if(!didOverview){ didOverview = true; showOverview(); }   // nur beim ersten Laden, nicht bei jedem Nachladen
 }
 
+// Verbindung: Fällt sie weg, steht oben ein Hinweis mit dem Zeitpunkt des letzten Stands. Änderungen werden dann nicht gespeichert
+// (die Seite macht sie rückgängig, siehe dbMachine). Nach dem Wiederverbinden lädt die Seite alles neu.
+let connOk = true, lastSync = null;
+function renderConnBanner(){
+  const b = $("connBanner");
+  if(!LIVE || !me || connOk){ b.className = ""; b.textContent = ""; return; }
+  b.className = "show";
+  b.textContent = "Keine Verbindung. " + (lastSync ? "Angezeigt ist der Stand von " + lastSync.toLocaleTimeString("de-CH", { hour:"2-digit", minute:"2-digit" }) + ". " : "") + "Änderungen werden jetzt nicht gespeichert.";
+}
 function setConn(ok){
+  connOk = ok;
+  if(ok) lastSync = new Date();
   const c = $("conn");
   c.hidden = false;
   c.textContent = ok ? "● live" : "○ getrennt";
   c.style.color = ok ? "var(--ok)" : "var(--wait)";
+  renderConnBanner();
 }
+window.addEventListener("offline", ()=>{ if(LIVE && me) setConn(false); });
+window.addEventListener("online", ()=>{ if(LIVE && me && sb) loadAll(); });
 
 function subscribe(){
   if(channel) return;
   const ch = sb.channel("dashboard");
-  ch.on("postgres_changes", { event:"*", schema:"public", table:"sites" }, p=>{
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"sites" }, p=>{ lastSync = new Date();
     if(p.eventType === "DELETE") sites = sites.filter(s => s.id !== p.old.id); else upsertSite(mapSite(p.new));
     softRender();
   });
-  ch.on("postgres_changes", { event:"*", schema:"public", table:"machines" }, p=>{
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"machines" }, p=>{ lastSync = new Date();
     if(p.eventType === "DELETE"){ machines = machines.filter(m => m.id !== p.old.id); }
     else {
       const n = mapMachine(p.new);
@@ -4135,19 +4158,19 @@ function subscribe(){
     }
     softRender();
   });
-  ch.on("postgres_changes", { event:"*", schema:"public", table:"needs" }, p=>{
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"needs" }, p=>{ lastSync = new Date();
     if(p.eventType === "DELETE") needs = needs.filter(n => n.id !== p.old.id); else upsertNeed(mapNeed(p.new));
     softRender();
   });
-  ch.on("postgres_changes", { event:"*", schema:"public", table:"materials" }, p=>{
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"materials" }, p=>{ lastSync = new Date();
     if(p.eventType === "DELETE") customMats = customMats.filter(x => x.id !== p.old.id); else upsertMaterial(mapMaterial(p.new));
     if(matRefresh && $("matList")) matRefresh();            // offenes Auswahlfenster nachführen
   });
-  ch.on("postgres_changes", { event:"*", schema:"public", table:"drawings" }, p=>{
+  ch.on("postgres_changes", { event:"*", schema:"public", table:"drawings" }, p=>{ lastSync = new Date();
     if(p.eventType === "DELETE") drawings = drawings.filter(d => d.id !== p.old.id); else upsertDrawing(mapDrawing(p.new));
     softRender();
   });
-  ch.on("postgres_changes", { event:"INSERT", schema:"public", table:"activity" }, p=>{
+  ch.on("postgres_changes", { event:"INSERT", schema:"public", table:"activity" }, p=>{ lastSync = new Date();
     pushLog(p.new.text, p.new.created_at, p.new.id);
     softRender();
   });
